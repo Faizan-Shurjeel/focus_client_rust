@@ -64,4 +64,4 @@ The foundational communication layer is built. The next steps involve implementi
     -   [ ] Send commands to an Android phone (via Tasker) to enable its "Do Not Disturb" mode.
 
 ---
-_This project is being developed in parallel with [Python](<link-to-python-repo-if-you-create-one>) and [Go](<link-to-go-repo-if-you-create-one>) versions to compare language ergonomics and performance for this task._
+_This project is being developed in parallel with [Python](<https://github.com/Faizan-Shurjeel/focus_client_python>) and [Go](<link-to-go-repo-if-you-create-one>) versions to compare language ergonomics and performance for this task._

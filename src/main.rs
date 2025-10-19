@@ -102,8 +102,8 @@ fn main() {
             if let Some(found_address) = discover_device(Duration::from_secs(5)) {
                 esp32_address = Some(found_address);
             } else {
-                println!("Device not found. Will retry in 10 seconds.");
-                thread::sleep(Duration::from_secs(10));
+                println!("Device not found. Will retry in 4 seconds.");
+                thread::sleep(Duration::from_secs(4));
             }
         }
 

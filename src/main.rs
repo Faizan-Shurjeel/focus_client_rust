@@ -2,23 +2,21 @@ use mdns_sd::{ServiceDaemon, ServiceEvent};
 use reqwest::blocking::Client;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
-use std::path::Path;
 use std::thread;
 use std::time::Duration;
+use std::fs; // Moved to the top with other imports
 
 // --- Configuration ---
 const SERVICE_NAME: &str = "_http._tcp.local.";
-const DEVICE_HOSTNAME: &str = "focus-totem"; // Fixed: Removed accidental space
+const DEVICE_HOSTNAME: &str = "focus-totem";
 const FOCUS_WALLPAPER_NAME: &str = "focus_wallpaper.jpg";
 
-// --- Safe, global, mutable state using the lazy_static and Mutex pattern ---
+// --- Safe, global, mutable state ---
 lazy_static! {
     static ref ORIGINAL_WALLPAPER_PATH: Mutex<Option<String>> = Mutex::new(None);
 }
 
 // --- Automation Functions ---
-// Add this at the top with the other `use` statements
-use std::fs;
 
 fn activate_focus_mode() {
     println!("Activating focus mode automations...");
@@ -31,7 +29,7 @@ fn activate_focus_mode() {
         eprintln!("Error getting original wallpaper.");
     }
 
-    // 2. Set the new focus wallpaper (with the fix)
+    // 2. Set the new focus wallpaper
     match fs::canonicalize(FOCUS_WALLPAPER_NAME) {
         Ok(absolute_path) => {
             println!("Found focus wallpaper at absolute path: {}", absolute_path.display());
@@ -46,13 +44,12 @@ fn activate_focus_mode() {
         }
     }
 }
+
 fn deactivate_focus_mode() {
     println!("Deactivating focus mode automations...");
     
-    // Lock the mutex to get access to the path. The lock is released when `original_path` goes out of scope.
     let mut original_path = ORIGINAL_WALLPAPER_PATH.lock().unwrap();
 
-    // `as_deref()` converts &Option<String> to Option<&str> for easy use.
     if let Some(path) = original_path.as_deref() {
         if let Err(e) = wallpaper::set_from_path(path) {
             eprintln!("Error restoring wallpaper: {:?}", e);
@@ -63,7 +60,6 @@ fn deactivate_focus_mode() {
         println!("No original wallpaper path saved, cannot restore.");
     }
     
-    // Clear the path after using it.
     *original_path = None;
 }
 
@@ -77,9 +73,8 @@ fn discover_device(search_duration: Duration) -> Option<String> {
     while start_time.elapsed() < search_duration {
         if let Ok(event) = receiver.recv_timeout(Duration::from_secs(1)) {
             if let ServiceEvent::ServiceResolved(info) = event {
-                // Check if the discovered device has the hostname we're looking for
                 if info.get_fullname().contains(DEVICE_HOSTNAME) {
-                    let ip = info.get_addresses().iter().next()?; // Get the first IP address
+                    let ip = info.get_addresses().iter().next()?;
                     let port = info.get_port();
                     let url = format!("http://{}:{}/status", ip, port);
                     println!("Resolved Focus Totem address: {}", url);
@@ -89,7 +84,7 @@ fn discover_device(search_duration: Duration) -> Option<String> {
         }
     }
     
-    None // Device not found in the given time
+    None
 }
 
 fn main() {
@@ -103,7 +98,6 @@ fn main() {
     println!("Starting Focus Mode client (Rust version)...");
     loop {
         if esp32_address.is_none() {
-            // --- STATE: DISCOVERING ---
             println!("Searching for Focus Totem on the network...");
             if let Some(found_address) = discover_device(Duration::from_secs(5)) {
                 esp32_address = Some(found_address);
@@ -114,7 +108,6 @@ fn main() {
         }
 
         if let Some(address) = &esp32_address {
-            // --- STATE: POLLING ---
             match http_client.get(address).send() {
                 Ok(response) => {
                     if response.status().is_success() && response.text().unwrap_or_default() == "FOCUS_ON" {
@@ -132,7 +125,7 @@ fn main() {
                         deactivate_focus_mode();
                     }
                     println!("Lost connection to device. Returning to search mode.");
-                    esp32_address = None; // Go back to discovery mode
+                    esp32_address = None;
                 }
             }
         }

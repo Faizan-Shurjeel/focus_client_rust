@@ -4,13 +4,14 @@
 #include <ArduinoJson.h>
 
 // --- IMPORTANT: CHANGE THESE TO YOUR WI-FI CREDENTIALS ---
-const char* ssid = "8its_and_8ytes";
-const char* password = "SIACsiac";
+const char *ssid = "realme 9";
+const char *password = "i885qfej";
 
 WebServer server(80);
 
 // --- Shared Status Variables ---
-struct Status {
+struct Status
+{
   bool wifiConnecting;
   bool wifiConnected;
 };
@@ -21,7 +22,7 @@ TaskHandle_t statusMonitorTaskHandle = NULL;
 SemaphoreHandle_t statusMutex;
 
 // --- THE (UNCHANGED) HTML PAGE ---
-const char* dashboardHTML = R"rawliteral(
+const char *dashboardHTML = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -236,7 +237,8 @@ const char* dashboardHTML = R"rawliteral(
 </html>
 )rawliteral";
 
-String formatUptime(unsigned long milliseconds) {
+String formatUptime(unsigned long milliseconds)
+{
   unsigned long seconds = milliseconds / 1000;
   unsigned long minutes = seconds / 60;
   unsigned long hours = minutes / 60;
@@ -245,125 +247,143 @@ String formatUptime(unsigned long milliseconds) {
   minutes %= 60;
   hours %= 24;
   String uptime = "";
-  if (days > 0) uptime += String(days) + "d ";
-  if (hours > 0) uptime += String(hours) + "h ";
-  if (minutes > 0) uptime += String(minutes) + "m ";
+  if (days > 0)
+    uptime += String(days) + "d ";
+  if (hours > 0)
+    uptime += String(hours) + "h ";
+  if (minutes > 0)
+    uptime += String(minutes) + "m ";
   uptime += String(seconds) + "s";
   return uptime;
 }
 
-void handleRoot() {
+void handleRoot()
+{
   server.send(200, "text/html", dashboardHTML);
 }
 
-void handleApiStatus() {
+void handleApiStatus()
+{
   StaticJsonDocument<256> doc;
   xSemaphoreTake(statusMutex, portMAX_DELAY);
   bool isConnecting = sharedStatus.wifiConnecting;
   bool isConnected = sharedStatus.wifiConnected;
   xSemaphoreGive(statusMutex);
-  
+
   doc["wifiConnected"] = isConnected;
   doc["wifiConnecting"] = isConnecting;
   doc["ssid"] = ssid;
   doc["mdns"] = "focus-totem.local";
   doc["uptime"] = formatUptime(millis());
   doc["freeHeap"] = String(ESP.getFreeHeap()) + " bytes";
-  
-  if (isConnected) {
+
+  if (isConnected)
+  {
     doc["ipAddress"] = WiFi.localIP().toString();
     doc["rssi"] = String(WiFi.RSSI()) + " dBm";
-  } else {
+  }
+  else
+  {
     doc["ipAddress"] = "N/A";
     doc["rssi"] = "N/A";
   }
-  
+
   doc["webCore"] = "Core " + String(xPortGetCoreID());
   doc["monitorCore"] = "Core 0";
-  
+
   String jsonResponse;
   serializeJson(doc, jsonResponse);
-  
+
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.send(200, "application/json", jsonResponse);
 }
 
-void handleStatus() {
+void handleStatus()
+{
   server.send(200, "text/plain", "FOCUS_ON");
 }
 
-void statusMonitorTask(void * parameter) {
-  for(;;) {
+void statusMonitorTask(void *parameter)
+{
+  for (;;)
+  {
     bool isConnectedNow = (WiFi.status() == WL_CONNECTED);
     xSemaphoreTake(statusMutex, portMAX_DELAY);
-    
-    if (isConnectedNow && !sharedStatus.wifiConnected) {
+
+    if (isConnectedNow && !sharedStatus.wifiConnected)
+    {
       Serial.println("WiFi has connected!");
       sharedStatus.wifiConnected = true;
       sharedStatus.wifiConnecting = false;
-    } else if (!isConnectedNow && sharedStatus.wifiConnected) {
+    }
+    else if (!isConnectedNow && sharedStatus.wifiConnected)
+    {
       Serial.println("WiFi has disconnected!");
       sharedStatus.wifiConnected = false;
       sharedStatus.wifiConnecting = true;
       WiFi.reconnect();
     }
-    
+
     xSemaphoreGive(statusMutex);
-    
+
     vTaskDelay(5000 / portTICK_PERIOD_MS);
   }
 }
 
-void setup() {
+void setup()
+{
   Serial.begin(115200);
   Serial.println("\n=== ESP32 Dual-Core Focus Totem (v3 - Stable) ===");
-  
+
   statusMutex = xSemaphoreCreateMutex();
-  
+
   sharedStatus.wifiConnected = false;
   sharedStatus.wifiConnecting = true;
   WiFi.begin(ssid, password);
   Serial.print("Initial WiFi connection attempt...");
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED)
+  {
     delay(500);
     Serial.print(".");
   }
   Serial.println("\nWiFi connected!");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-  
+
   sharedStatus.wifiConnected = true;
   sharedStatus.wifiConnecting = false;
-  
-  if (!MDNS.begin("focus-totem")) {
+
+  if (!MDNS.begin("focus-totem"))
+  {
     Serial.println("Error setting up mDNS responder!");
-    while(1);
+    while (1)
+      ;
   }
   MDNS.addService("http", "tcp", 80);
-  
+
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/status", HTTP_GET, handleApiStatus);
   server.on("/status", HTTP_GET, handleStatus);
   server.begin();
-  
+
   Serial.println("Web server running on Core 1 (main loop)");
   Serial.println("Dashboard: http://focus-totem.local/");
-  
+
   // Create Status Monitor Task on Core 0
   xTaskCreatePinnedToCore(
-    statusMonitorTask,
-    "StatusMonitorTask",
-    10000,
-    NULL,
-    1,
-    &statusMonitorTaskHandle, // <-- THIS IS THE CORRECTED LINE
-    0
-  );
-  
+      statusMonitorTask,
+      "StatusMonitorTask",
+      10000,
+      NULL,
+      1,
+      &statusMonitorTaskHandle, // <-- THIS IS THE CORRECTED LINE
+      0);
+
   Serial.println("Status monitor running on Core 0");
 }
 
-void loop() {
+void loop()
+{
   // The main loop() is now our dedicated Web Server task for Core 1
   server.handleClient();
   // Add a small delay to prevent the watchdog timer from triggering

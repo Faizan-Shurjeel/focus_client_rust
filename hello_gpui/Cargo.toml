@@ -1,0 +1,17 @@
+[package]
+name = "hello_gpui"
+version = "0.1.0"
+edition = "2024"
+# In your Cargo.toml
+
+[dependencies]
+gpui = "0.2.2"
+# THIS IS THE FIX: Add the "blocking" feature
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+lazy_static = "1.5.0"
+mdns-sd = "0.17.1"
+smol = "2.0.2" # Add this line
+wallpaper = "3.2.0"
+
+[build-dependencies]
+embed-manifest = "1.4"

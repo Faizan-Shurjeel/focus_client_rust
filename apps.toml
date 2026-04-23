@@ -9,8 +9,7 @@ windows = [
 ]
 
 linux = [
-  "gedit",
-  "firefox"
+  "brave-browser"
 ]
 
 # Optional for future use:

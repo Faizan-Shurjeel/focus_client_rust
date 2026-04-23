@@ -4,8 +4,8 @@
 #include <ArduinoJson.h>
 
 // --- IMPORTANT: CHANGE THESE TO YOUR WI-FI CREDENTIALS ---
-const char *ssid = "realme 9";
-const char *password = "i885qfej";
+const char *ssid = "Faizy's A54";
+const char *password = "12345678";
 
 WebServer server(80);
 
@@ -133,7 +133,7 @@ const char *dashboardHTML = R"rawliteral(
 
     <div class="status-card">
       <h2 class="md-typescale-title-large">System Status</h2>
-      
+
       <div class="status-row">
         <span class="md-typescale-body-large">WiFi Connection</span>
         <span class="md-typescale-body-medium">
@@ -197,10 +197,10 @@ const char *dashboardHTML = R"rawliteral(
             return;
         }
         const data = await response.json();
-        
+
         const wifiIndicator = document.getElementById('wifi-indicator');
         const wifiStatus = document.getElementById('wifi-status');
-        
+
         if (data.wifiConnected) {
           wifiIndicator.className = 'status-indicator status-connected';
           wifiStatus.textContent = 'Connected';
@@ -211,7 +211,7 @@ const char *dashboardHTML = R"rawliteral(
           wifiIndicator.className = 'status-indicator status-disconnected';
           wifiStatus.textContent = 'Disconnected';
         }
-        
+
         document.getElementById('ssid').textContent = data.ssid || 'N/A';
         document.getElementById('ip-address').textContent = data.ipAddress || 'N/A';
         document.getElementById('mdns').textContent = data.mdns || 'N/A';
@@ -226,10 +226,10 @@ const char *dashboardHTML = R"rawliteral(
     }
 
     document.getElementById('refresh-btn').addEventListener('click', updateStatus);
-    
+
     // Initial load
     updateStatus();
-    
+
     // Auto-refresh every 5 seconds
     setInterval(updateStatus, 5000);
   </script>

@@ -1,0 +1,17 @@
+# App commands/paths to launch when Focus Mode turns ON.
+# This file uses a structured OS-to-app map.
+# Supported OS keys include: "windows", "linux", "macos"
+
+[apps]
+windows = [
+  "C:\\Windows\\System32\\notepad.exe",
+  "C:\\Users\\Faizy\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"
+]
+
+linux = [
+  "gedit",
+  "firefox"
+]
+
+# Optional for future use:
+# macos = ["TextEdit", "Google Chrome"]

@@ -1,276 +1,247 @@
-// use mdns_sd::{ServiceDaemon, ServiceEvent};
-// use reqwest::blocking::Client;
-// use lazy_static::lazy_static;
-// use std::sync::Mutex;
-// use std::thread;
-// use std::time::Duration;
-// use std::fs;
-// use std::process::Command; // <-- Added for launching apps
-
-// // --- 1. CONFIGURE YOUR APPLICATIONS HERE ---
-// // Find the full path to the .exe for each application you want to launch.
-// // Example: "C:\\Users\\YourUser\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
-// const FOCUS_APPS: &[&str] = &[
-//     "C:\\Windows\\System32\\notepad.exe",
-//     "C:\\Users\\Faizy\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
-// ];
-
-// // --- Configuration ---
-// const SERVICE_NAME: &str = "_http._tcp.local.";
-// const DEVICE_HOSTNAME: &str = "focus-totem";
-// const FOCUS_WALLPAPER_NAME: &str = "focus_wallpaper.jpg";
-
-// // --- Safe, global, mutable state ---
-// lazy_static! {
-//     static ref ORIGINAL_WALLPAPER_PATH: Mutex<Option<String>> = Mutex::new(None);
-//     // This will hold the Process IDs (PIDs) of the apps we launch
-//     static ref LAUNCHED_PIDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-// }
-
-// // --- Automation Functions ---
-
-// fn activate_focus_mode() {
-//     println!("Activating focus mode automations...");
-    
-//     // --- 1. Wallpaper Logic ---
-//     if let Ok(path) = wallpaper::get() {
-//         println!("Saved original wallpaper: {}", &path);
-//         *ORIGINAL_WALLPAPER_PATH.lock().unwrap() = Some(path);
-//     }
-//     match fs::canonicalize(FOCUS_WALLPAPER_NAME) {
-//         Ok(absolute_path) => {
-//             if wallpaper::set_from_path(absolute_path.to_str().unwrap()).is_ok() {
-//                 println!("Focus wallpaper has been set.");
-//             } else {
-//                 eprintln!("Error setting focus wallpaper.");
-//             }
-//         }
-//         Err(e) => eprintln!("ERROR: Could not find wallpaper '{}': {}", FOCUS_WALLPAPER_NAME, e),
-//     }
-
-//     // --- 2. Launch Applications ---
-//     println!("Launching focus applications...");
-//     let mut pids = LAUNCHED_PIDS.lock().unwrap();
-//     pids.clear(); // Clear any old PIDs just in case
-
-//     for app_path in FOCUS_APPS {
-//         match Command::new(app_path).spawn() {
-//             Ok(child) => {
-//                 let pid = child.id();
-//                 println!("Successfully launched '{}' with PID: {}", app_path, pid);
-//                 pids.push(pid);
-//             }
-//             Err(e) => {
-//                 eprintln!("ERROR: Failed to launch '{}': {}", app_path, e);
-//             }
-//         }
-//     }
-// }
-
-// // Replace ONLY this function in src/main.rs
-
-// fn deactivate_focus_mode() {
-//     println!("Deactivating focus mode automations...");
-    
-//     // --- 1. Wallpaper Logic (Unchanged) ---
-//     let mut original_path = ORIGINAL_WALLPAPER_PATH.lock().unwrap();
-//     if let Some(path) = original_path.as_deref() {
-//         if wallpaper::set_from_path(path).is_ok() {
-//             println!("Restored original wallpaper: {}", path);
-//         } else {
-//             eprintln!("Error restoring wallpaper.");
-//         }
-//     }
-//     *original_path = None;
-
-//     // --- 2. Close Applications (WITH BETTER ERROR LOGGING) ---
-//     println!("Closing focus applications...");
-//     let mut pids = LAUNCHED_PIDS.lock().unwrap();
-    
-//     for &pid in pids.iter() {
-//         match Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).output() {
-//             Ok(output) => {
-//                 if output.status.success() {
-//                     println!("Successfully terminated process tree for PID: {}", pid);
-//                 } else {
-//                     // If taskkill failed, print its error message
-//                     let stderr = String::from_utf8_lossy(&output.stderr);
-//                     eprintln!("Failed to terminate PID {}. Reason: {}", pid, stderr.trim());
-//                 }
-//             }
-//             Err(e) => {
-//                 eprintln!("Error executing taskkill for PID {}: {}", pid, e);
-//             }
-//         }
-//     }
-
-//     // Clear the list of PIDs now that they are closed
-//     pids.clear();
-// }
-// // --- Core Logic ---
-
-// fn discover_device(search_duration: Duration) -> Option<String> {
-//     let mdns = ServiceDaemon::new().expect("Failed to create mDNS daemon");
-//     let receiver = mdns.browse(SERVICE_NAME).expect("Failed to browse for service");
-//     let start_time = std::time::Instant::now();
-
-//     while start_time.elapsed() < search_duration {
-//         if let Ok(event) = receiver.recv_timeout(Duration::from_secs(1)) {
-//             if let ServiceEvent::ServiceResolved(info) = event {
-//                 if info.get_fullname().contains(DEVICE_HOSTNAME) {
-//                     let ip = info.get_addresses().iter().next()?;
-//                     let port = info.get_port();
-//                     let url = format!("http://{}:{}/status", ip, port);
-//                     println!("Resolved Focus Totem address: {}", url);
-//                     return Some(url);
-//                 }
-//             }
-//         }
-//     }
-    
-//     None
-// }
-
-// fn main() {
-//     let http_client = Client::builder()
-//         .timeout(Duration::from_secs(2))
-//         .build()
-//         .expect("Failed to build HTTP client");
-//     let mut is_focused = false;
-//     let mut esp32_address: Option<String> = None;
-
-//     println!("Starting Focus Mode client (Rust version)...");
-//     loop {
-//         if esp32_address.is_none() {
-//             println!("Searching for Focus Totem on the network...");
-//             if let Some(found_address) = discover_device(Duration::from_secs(5)) {
-//                 esp32_address = Some(found_address);
-//             } else {
-//                 println!("Device not found. Will retry in 10 seconds.");
-//                 thread::sleep(Duration::from_secs(10));
-//             }
-//         }
-
-//         if let Some(address) = &esp32_address {
-//             match http_client.get(address).send() {
-//                 Ok(response) => {
-//                     if response.status().is_success() && response.text().unwrap_or_default() == "FOCUS_ON" {
-//                         if !is_focused {
-//                             is_focused = true;
-//                             println!("--- FOCUS MODE ACTIVATED ---");
-//                             activate_focus_mode();
-//                         }
-//                     }
-//                 }
-//                 Err(_) => {
-//                     if is_focused {
-//                         is_focused = false;
-//                         println!("--- FOCUS MODE DEACTIVATED ---");
-//                         deactivate_focus_mode();
-//                     }
-//                     println!("Lost connection to device. Returning to search mode.");
-//                     esp32_address = None;
-//                 }
-//             }
-//         }
-//         thread::sleep(Duration::from_secs(3));
-//     }
-// }
-
-
-// Process ID Commented
-
+use lazy_static::lazy_static;
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use reqwest::blocking::Client;
-use lazy_static::lazy_static;
+use serde::Deserialize;
+use std::fs;
+#[cfg(target_os = "windows")]
+use std::path::Path;
+use std::process::Command;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use std::fs;
-use std::process::Command;
-use std::path::Path; // <-- We now need this for getting filenames
-
-// --- 1. CONFIGURE YOUR APPLICATIONS HERE ---
-const FOCUS_APPS: &[&str] = &[
-    "C:\\Windows\\System32\\notepad.exe",
-    "C:\\Users\\Faizy\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
-];
 
 // --- Configuration ---
 const SERVICE_NAME: &str = "_http._tcp.local.";
 const DEVICE_HOSTNAME: &str = "focus-totem";
 const FOCUS_WALLPAPER_NAME: &str = "focus_wallpaper.jpg";
+const APPS_CONFIG_FILE: &str = "apps.toml";
 
-// --- Safe, global, mutable state (PID list is now gone) ---
 lazy_static! {
     static ref ORIGINAL_WALLPAPER_PATH: Mutex<Option<String>> = Mutex::new(None);
 }
 
-// --- Automation Functions ---
+#[derive(Debug, Deserialize)]
+struct AppsConfig {
+    apps: std::collections::HashMap<String, Vec<String>>,
+}
 
-fn activate_focus_mode() {
+fn default_focus_apps() -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            r"C:\Windows\System32\notepad.exe".to_string(),
+            r"C:\Users\Faizy\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe"
+                .to_string(),
+        ]
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        vec!["gedit".to_string(), "firefox".to_string()]
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        vec!["TextEdit".to_string(), "Google Chrome".to_string()]
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        vec![]
+    }
+}
+
+fn parse_apps_config(contents: &str) -> Result<AppsConfig, toml::de::Error> {
+    toml::from_str(contents)
+}
+
+fn select_apps_for_current_os(config: &AppsConfig) -> Option<Vec<String>> {
+    config.apps.get(std::env::consts::OS).cloned()
+}
+
+fn sanitize_apps(apps: Vec<String>) -> Vec<String> {
+    apps.into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn load_focus_apps() -> Vec<String> {
+    match fs::read_to_string(APPS_CONFIG_FILE) {
+        Ok(contents) => match parse_apps_config(&contents) {
+            Ok(config) => {
+                let selected = select_apps_for_current_os(&config).unwrap_or_default();
+                let cleaned = sanitize_apps(selected);
+                if cleaned.is_empty() {
+                    let defaults = default_focus_apps();
+                    println!(
+                        "No apps configured for OS '{}' in '{}'. Using {} default app(s).",
+                        std::env::consts::OS,
+                        APPS_CONFIG_FILE,
+                        defaults.len()
+                    );
+                    defaults
+                } else {
+                    println!(
+                        "Loaded {} app(s) for OS '{}' from '{}'.",
+                        cleaned.len(),
+                        std::env::consts::OS,
+                        APPS_CONFIG_FILE
+                    );
+                    cleaned
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "ERROR: Could not parse '{}': {}. Falling back to defaults.",
+                    APPS_CONFIG_FILE, e
+                );
+                default_focus_apps()
+            }
+        },
+        Err(e) => {
+            eprintln!(
+                "ERROR: Could not read '{}': {}. Falling back to defaults.",
+                APPS_CONFIG_FILE, e
+            );
+            default_focus_apps()
+        }
+    }
+}
+
+fn launch_app(app: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        return Command::new("open").args(["-a", app]).spawn().map(|_| ());
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        return Command::new(app).spawn().map(|_| ());
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Unsupported OS: {}", std::env::consts::OS),
+        ))
+    }
+}
+
+fn terminate_app(app: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let image_name = Path::new(app)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(app);
+
+        let output = Command::new("taskkill")
+            .args(["/F", "/IM", image_name])
+            .output()?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("taskkill failed for '{}': {}", image_name, stderr.trim()),
+        ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let output = Command::new("pkill").args(["-f", app]).output()?;
+
+        // pkill exit code: 0 => matched/killed, 1 => no matching process (safe for us)
+        if output.status.success() || output.status.code() == Some(1) {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("pkill failed for '{}': {}", app, stderr.trim()),
+        ));
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Unsupported OS: {}", std::env::consts::OS),
+        ))
+    }
+}
+
+fn activate_focus_mode(focus_apps: &[String]) {
     println!("Activating focus mode automations...");
-    
-    // --- 1. Wallpaper Logic (Unchanged) ---
+
+    // Save current wallpaper so we can restore it later
     if let Ok(path) = wallpaper::get() {
-        println!("Saved original wallpaper: {}", &path);
+        println!("Saved original wallpaper: {}", path);
         *ORIGINAL_WALLPAPER_PATH.lock().unwrap() = Some(path);
     }
+
+    // Set focus wallpaper
     match fs::canonicalize(FOCUS_WALLPAPER_NAME) {
         Ok(absolute_path) => {
             if wallpaper::set_from_path(absolute_path.to_str().unwrap()).is_ok() {
                 println!("Focus wallpaper has been set.");
+            } else {
+                eprintln!("ERROR: Failed to set focus wallpaper.");
             }
         }
-        Err(e) => eprintln!("ERROR: Could not find wallpaper: {}", e),
+        Err(e) => eprintln!(
+            "ERROR: Could not find wallpaper '{}': {}",
+            FOCUS_WALLPAPER_NAME, e
+        ),
     }
 
-    // --- 2. Launch Applications (Simpler) ---
-    println!("Launching focus applications...");
-    for app_path in FOCUS_APPS {
-        if let Err(e) = Command::new(app_path).spawn() {
-            eprintln!("ERROR: Failed to launch '{}': {}", app_path, e);
-        } else {
-            println!("Successfully launched '{}'", app_path);
+    // Launch apps
+    println!(
+        "Launching focus applications for {}...",
+        std::env::consts::OS
+    );
+    for app in focus_apps {
+        match launch_app(app) {
+            Ok(_) => println!("Successfully launched '{}'", app),
+            Err(e) => eprintln!("ERROR: Failed to launch '{}': {}", app, e),
         }
     }
 }
 
-fn deactivate_focus_mode() {
+fn deactivate_focus_mode(focus_apps: &[String]) {
     println!("Deactivating focus mode automations...");
-    
-    // --- 1. Wallpaper Logic (Unchanged) ---
+
+    // Restore wallpaper
     let mut original_path = ORIGINAL_WALLPAPER_PATH.lock().unwrap();
     if let Some(path) = original_path.as_deref() {
         if wallpaper::set_from_path(path).is_ok() {
             println!("Restored original wallpaper: {}", path);
+        } else {
+            eprintln!("ERROR: Failed to restore wallpaper.");
         }
     }
     *original_path = None;
 
-    // --- 2. Close Applications by Executable Name ---
-    println!("Closing focus applications...");
-    for app_path in FOCUS_APPS {
-        // Extract just the filename (e.g., "brave.exe") from the full path
-        if let Some(file_name) = Path::new(app_path).file_name().and_then(|s| s.to_str()) {
-            // Use taskkill with /IM (Image Name) to target all processes with this name
-            match Command::new("taskkill").args(["/F", "/IM", file_name]).output() {
-                Ok(output) if output.status.success() => {
-                    println!("Successfully terminated all '{}' processes.", file_name);
-                }
-                _ => {
-                    // This will likely show for apps that were already closed, which is fine.
-                    // eprintln!("Could not find or terminate '{}'. It may have already been closed.", file_name);
-                }
-            }
+    // Close apps
+    println!("Closing focus applications for {}...", std::env::consts::OS);
+    for app in focus_apps {
+        if let Err(e) = terminate_app(app) {
+            eprintln!("ERROR: Failed to close '{}': {}", app, e);
         }
     }
 }
 
-// --- The rest of your code (discover_device, main) remains exactly the same ---
 fn discover_device(search_duration: Duration) -> Option<String> {
     let mdns = ServiceDaemon::new().expect("Failed to create mDNS daemon");
-    let receiver = mdns.browse(SERVICE_NAME).expect("Failed to browse for service");
+    let receiver = mdns
+        .browse(SERVICE_NAME)
+        .expect("Failed to browse for service");
     let start_time = std::time::Instant::now();
 
     while start_time.elapsed() < search_duration {
@@ -286,6 +257,7 @@ fn discover_device(search_duration: Duration) -> Option<String> {
             }
         }
     }
+
     None
 }
 
@@ -294,10 +266,16 @@ fn main() {
         .timeout(Duration::from_secs(2))
         .build()
         .expect("Failed to build HTTP client");
+
+    let focus_apps = load_focus_apps();
+
     let mut is_focused = false;
     let mut esp32_address: Option<String> = None;
 
     println!("Starting Focus Mode client (Rust version)...");
+    println!("Detected OS: {}", std::env::consts::OS);
+    println!("Configured apps: {:?}", focus_apps);
+
     loop {
         if esp32_address.is_none() {
             println!("Searching for Focus Totem on the network...");
@@ -312,11 +290,13 @@ fn main() {
         if let Some(address) = &esp32_address {
             match http_client.get(address).send() {
                 Ok(response) => {
-                    if response.status().is_success() && response.text().unwrap_or_default() == "FOCUS_ON" {
+                    if response.status().is_success()
+                        && response.text().unwrap_or_default() == "FOCUS_ON"
+                    {
                         if !is_focused {
                             is_focused = true;
                             println!("--- FOCUS MODE ACTIVATED ---");
-                            activate_focus_mode();
+                            activate_focus_mode(&focus_apps);
                         }
                     }
                 }
@@ -324,13 +304,14 @@ fn main() {
                     if is_focused {
                         is_focused = false;
                         println!("--- FOCUS MODE DEACTIVATED ---");
-                        deactivate_focus_mode();
+                        deactivate_focus_mode(&focus_apps);
                     }
                     println!("Lost connection to device. Returning to search mode.");
                     esp32_address = None;
                 }
             }
         }
+
         thread::sleep(Duration::from_secs(3));
     }
 }

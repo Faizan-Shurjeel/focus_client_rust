@@ -28,11 +28,11 @@ The brain of the physical device. This is a robust, multi-threaded application b
 
 ### Rust Client (`src/main.rs`)
 
-A lightweight, highly reliable background application that runs on your desktop and requires administrator privileges to control other applications.
+A lightweight, highly reliable background application that runs on your desktop.
 *   **Automatic Discovery:** Uses mDNS to find the `focus-totem` on the network.
 *   **State Tracking:** Polls the totem's `/status` endpoint to track its online status.
-*   **Automation Engine:** Based on the totem's state, it executes powerful workflows:
-    *   **Application Control:** Launches a configurable list of applications and reliably terminates the entire process tree for each one on deactivation.
+*   **Cross-Platform Automation Engine (Windows + Linux):** Based on the totem's state, it executes powerful workflows:
+    *   **Application Control:** Loads app commands/paths from `apps.toml`, launches the configured list, and closes them when focus mode is deactivated.
     *   **Wallpaper Management:** Changes and restores the desktop wallpaper.
 
 ## Key Features Implemented
@@ -43,7 +43,7 @@ A lightweight, highly reliable background application that runs on your desktop 
 | ✅ Material Design 3 Web Dashboard | ✅ Real-time State Tracking |
 | ✅ Real-time JSON API for status | ✅ **Dynamic Wallpaper Changing** |
 | ✅ Backward-compatible `/status` endpoint | ✅ **Application Launching & Closing** |
-| | ✅ **Requires Admin Privileges** (for robust control) |
+| | ✅ Cross-platform app config via `apps.toml` |
 
 ## Setup and Usage
 
@@ -65,24 +65,38 @@ The Rust client now requires Administrator privileges to reliably terminate comp
     *   Rust Toolchain (via [rustup](https://www.rust-lang.org/tools/install)).
     *   A focus wallpaper image named `focus_wallpaper.jpg` placed in the project's root folder.
 
-*   **Configuration:**
-    1.  Open `src/main.rs` in a text editor.
-    2.  Find the `FOCUS_APPS` constant near the top of the file.
-    3.  Edit the list of paths to point to the `.exe` files of the applications you want to manage.
+*   **Configuration (`apps.toml`):**
+    1.  Open `apps.toml` in a text editor.
+    2.  Define app lists under the `[apps]` table using OS keys such as `windows` and `linux`.
+    3.  Put full executable paths for Windows apps, and command names (or full paths) for Linux apps.
+    4.  Example:
+        ```focus_client_rust/apps.toml#L1-10
+[apps]
+windows = [
+  "C:\\Windows\\System32\\notepad.exe",
+  "C:\\Users\\Faizy\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"
+]
+
+linux = [
+  "gedit",
+  "firefox"
+]
+        ```
 
 *   **Build and Run:**
-    1.  Build the release executable. This will embed the administrator manifest.
-        ```bash
-        cargo build --release
+    1.  Build and run:
+        ```focus_client_rust/README.md#L1-2
+cargo build --release
+cargo run
         ```
-    2.  Navigate to the `target/release` folder in your file explorer.
-    3.  **Right-click on `focus_client_rust.exe` and select "Run as administrator"**, or simply double-click it and approve the UAC (User Account Control) prompt.
+    2.  On Windows, if you need stronger process-control behavior for protected apps, run the executable as Administrator.
 
 ## Project Files
 
 *   `Multithreaded_Dashboard.ino`: **The main, recommended firmware for the ESP32.**
 *   `src/main.rs`: The source code for the Rust desktop client.
-*   `build.rs` & `manifest.xml`: Build scripts that embed a manifest into the `.exe`, ensuring it requests administrator privileges from Windows.
+*   `apps.toml`: Cross-platform app configuration loaded at runtime (`[apps].windows`, `[apps].linux`, etc.).
+*   `build.rs` & `manifest.xml`: Windows-specific build integration (manifest embedding only applies to Windows targets).
 *   `totem.cpp`: The original, single-threaded ESP32 code (for historical reference).
 
 ## Roadmap & Next Steps
@@ -93,7 +107,7 @@ With the core automation in place, the next major goal is full system integratio
 -   [x] ~~Automatically launch and close specific applications.~~ (Done!)
 -   [ ] **System-wide "Do Not Disturb":** Integrate with Windows 11's Focus Assist by modifying the registry (now possible with admin rights).
 -   [ ] **Package Client as a Background Service:** Create a true background process that starts automatically with Windows.
--   [ ] **Create a Configuration File:** Move app paths out of the source code and into a `config.toml` file for easier editing.
+-   [x] **Create a Configuration File:** App paths/commands are now loaded from `apps.toml` for easier cross-platform editing.
 
 ---
 _This project is being developed in parallel with a [Python version](https://github.com/Faizan-Shurjeel/focus_client_python) to compare language ergonomics and performance._

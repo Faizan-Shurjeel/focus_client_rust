@@ -59,7 +59,12 @@ A lightweight, highly reliable background application that runs on your desktop.
 
 ### 2. Prepare and Run the Rust Client
 
-The Rust client now requires Administrator privileges to reliably terminate complex applications like web browsers. The project is configured to automatically request these permissions.
+The Rust client supports two runtime modes:
+
+- **Mock Mode (default in debug builds):** Uses a local mock endpoint at `http://localhost:8080/status` so you can test wallpaper/app automation without ESP32 hardware.
+- **Real Mode (release builds):** Uses mDNS discovery to find the physical `focus-totem` device on your network.
+
+On Windows, if you need stronger process-control behavior for protected apps, run the executable as Administrator.
 
 *   **Prerequisites:**
     *   Rust Toolchain (via [rustup](https://www.rust-lang.org/tools/install)).
@@ -83,19 +88,35 @@ linux = [
 ]
         ```
 
-*   **Build and Run:**
-    1.  Build and run:
-        ```focus_client_rust/README.md#L1-2
-cargo build --release
+*   **Build and Run (Mock Mode for ESP32-free development):**
+    1.  Start the local mock server:
+        ```focus_client_rust/README.md#L1-1
+python3 mock_esp32.py
+        ```
+    2.  In another terminal, run the Rust client in debug mode:
+        ```focus_client_rust/README.md#L1-1
 cargo run
         ```
-    2.  On Windows, if you need stronger process-control behavior for protected apps, run the executable as Administrator.
+    3.  In debug mode, the client prints a development banner and polls:
+        - `http://localhost:8080/status`
+        - Expected response: `FOCUS_ON`
+    4.  Stop the mock server (`Ctrl+C`) to simulate device disconnect and verify deactivation behavior.
+    5.  On GNOME-based Linux distros (like Zorin), wallpaper switching uses the `wallpaper` crate first, then falls back to `gsettings` (`org.gnome.desktop.background`) for better compatibility.
+
+*   **Build and Run (Real ESP32 mode):**
+    1.  Build/run in release mode:
+        ```focus_client_rust/README.md#L1-2
+cargo build --release
+cargo run --release
+        ```
+    2.  In this mode, the client uses normal mDNS discovery (`focus-totem`) and polls the real `/status` endpoint.
 
 ## Project Files
 
 *   `Multithreaded_Dashboard.ino`: **The main, recommended firmware for the ESP32.**
-*   `src/main.rs`: The source code for the Rust desktop client.
+*   `src/main.rs`: The source code for the Rust desktop client (includes debug mock-mode logic and release real-device logic).
 *   `apps.toml`: Cross-platform app configuration loaded at runtime (`[apps].windows`, `[apps].linux`, etc.).
+*   `mock_esp32.py`: Local mock server that simulates `GET /status -> FOCUS_ON`.
 *   `build.rs` & `manifest.xml`: Windows-specific build integration (manifest embedding only applies to Windows targets).
 *   `totem.cpp`: The original, single-threaded ESP32 code (for historical reference).
 

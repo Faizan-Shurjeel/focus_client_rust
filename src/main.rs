@@ -1,3 +1,6 @@
+mod session;
+
+use chrono::{DateTime, Local};
 use lazy_static::lazy_static;
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use reqwest::blocking::Client;
@@ -9,6 +12,8 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+
+use session::{append_session, SessionRecord};
 
 #[cfg(debug_assertions)]
 const DEV_MODE: bool = true; // Enable for local development
@@ -383,6 +388,35 @@ fn deactivate_focus_mode(focus_apps: &[String]) {
     }
 }
 
+fn begin_focus_session(session_start: &mut Option<DateTime<Local>>) {
+    let start_time = Local::now();
+    println!(
+        "Focus session started at {}",
+        start_time.format("%Y-%m-%d %H:%M:%S")
+    );
+    *session_start = Some(start_time);
+}
+
+fn end_focus_session(session_start: &mut Option<DateTime<Local>>) {
+    let Some(start_time) = session_start.take() else {
+        eprintln!("Session logging skipped: no active session start time was recorded.");
+        return;
+    };
+
+    let end_time = Local::now();
+    let record = SessionRecord::new(start_time, end_time);
+    let duration_minutes = record.duration_minutes;
+
+    match append_session(record) {
+        Ok(path) => println!(
+            "Focus session logged: {:.2} minute(s) -> {}",
+            duration_minutes,
+            path.display()
+        ),
+        Err(e) => eprintln!("ERROR: Failed to write focus session log: {}", e),
+    }
+}
+
 fn discover_device(search_duration: Duration) -> Option<String> {
     let mdns = ServiceDaemon::new().expect("Failed to create mDNS daemon");
     let receiver = mdns
@@ -417,6 +451,7 @@ fn main() {
 
     let mut is_focused = false;
     let mut esp32_address: Option<String> = None;
+    let mut session_start: Option<DateTime<Local>> = None;
 
     println!("Starting Focus Mode client (Rust version)...");
     println!("Detected OS: {}", std::env::consts::OS);
@@ -448,12 +483,14 @@ fn main() {
                             if !is_focused {
                                 is_focused = true;
                                 println!("[MOCK] --- FOCUS MODE ACTIVATED ---");
+                                begin_focus_session(&mut session_start);
                                 activate_focus_mode(&focus_apps);
                             }
                         } else if is_focused {
                             is_focused = false;
                             println!("[MOCK] --- FOCUS MODE DEACTIVATED (non-FOCUS_ON) ---");
                             deactivate_focus_mode(&focus_apps);
+                            end_focus_session(&mut session_start);
                         }
                     }
                     Err(e) => {
@@ -462,6 +499,7 @@ fn main() {
                             is_focused = false;
                             println!("[MOCK] --- FOCUS MODE DEACTIVATED ---");
                             deactivate_focus_mode(&focus_apps);
+                            end_focus_session(&mut session_start);
                         }
                         esp32_address = None;
                     }
@@ -491,6 +529,7 @@ fn main() {
                         if !is_focused {
                             is_focused = true;
                             println!("--- FOCUS MODE ACTIVATED ---");
+                            begin_focus_session(&mut session_start);
                             activate_focus_mode(&focus_apps);
                         }
                     }
@@ -500,6 +539,7 @@ fn main() {
                         is_focused = false;
                         println!("--- FOCUS MODE DEACTIVATED ---");
                         deactivate_focus_mode(&focus_apps);
+                        end_focus_session(&mut session_start);
                     }
                     println!("Lost connection to device. Returning to search mode.");
                     esp32_address = None;

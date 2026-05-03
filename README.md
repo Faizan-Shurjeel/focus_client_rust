@@ -34,6 +34,7 @@ A lightweight, highly reliable background application that runs on your desktop.
 *   **Cross-Platform Automation Engine (Windows + Linux):** Based on the totem's state, it executes powerful workflows:
     *   **Application Control:** Loads app commands/paths from `apps.toml`, launches the configured list, and closes them when focus mode is deactivated.
     *   **Wallpaper Management:** Changes and restores the desktop wallpaper.
+    *   **Session Logging:** Records every completed focus session to a local JSON file for future analytics/reporting.
 
 ## Key Features Implemented
 
@@ -44,6 +45,7 @@ A lightweight, highly reliable background application that runs on your desktop.
 | ✅ Real-time JSON API for status | ✅ **Dynamic Wallpaper Changing** |
 | ✅ Backward-compatible `/status` endpoint | ✅ **Application Launching & Closing** |
 | | ✅ Cross-platform app config via `apps.toml` |
+| | ✅ Local JSON session logging |
 
 ## Setup and Usage
 
@@ -114,10 +116,18 @@ cargo run --release
         ```
     2.  In this mode, the client uses normal mDNS discovery (`focus-totem`) and polls the real `/status` endpoint.
 
+*   **Session Logs:**
+    - A completed focus session is recorded when focus mode deactivates.
+    - The client prints the session log file path on first write.
+    - Linux path: `~/.local/share/focus_totem/sessions.json`
+    - Windows path: `%APPDATA%\FocusTotem\sessions.json`
+    - The file is a JSON array, ready for analytics/report generation later.
+
 ## Project Files
 
 *   `Multithreaded_Dashboard.ino`: **The main, recommended firmware for the ESP32.**
 *   `src/main.rs`: The source code for the Rust desktop client (includes debug mock-mode logic and release real-device logic).
+*   `src/session.rs`: Focus session model and atomic JSON session logging.
 *   `apps.toml`: Cross-platform app configuration loaded at runtime (`[apps].windows`, `[apps].linux`, etc.).
 *   `mock_server/`: Rust mock ESP32 server crate with `GET /status` and `GET /toggle` endpoints.
 *   `build.rs` & `manifest.xml`: Windows-specific build integration (manifest embedding only applies to Windows targets).
@@ -132,6 +142,7 @@ With the core automation in place, the next major goal is full system integratio
 -   [ ] **System-wide "Do Not Disturb":** Integrate with Windows 11's Focus Assist by modifying the registry (now possible with admin rights).
 -   [ ] **Package Client as a Background Service:** Create a true background process that starts automatically with Windows.
 -   [x] **Create a Configuration File:** App paths/commands are now loaded from `apps.toml` for easier cross-platform editing.
+-   [x] **Session Logging Foundation:** Completed focus sessions are written to `sessions.json` for future analytics.
 
 ---
 _This project is now Rust-first: the desktop client and mock ESP32 server both live in this workspace._

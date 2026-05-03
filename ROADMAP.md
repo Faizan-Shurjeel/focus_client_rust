@@ -10,10 +10,10 @@
 - ✅ `M3-Redesign.ino` — dual-core FreeRTOS firmware with Material Design 3 dashboard
 - ✅ `mock_server/` — Rust Axum mock server with `/status` and `/toggle` endpoints
 - ✅ `hello_gpui/` — GPUI UI experiment (parked, not integrated)
-- ❌ Session logging — not implemented
+- ✅ Session logging — implemented in `src/session.rs` with local JSON storage
 - ❌ AI analytics — not implemented
 - ❌ Report generation — not implemented
-- ❌ Rust mock server — not implemented
+- ✅ Rust mock server — implemented in `mock_server/`
 
 ---
 
@@ -52,6 +52,8 @@
 ## Phase 2 — Session Logging Foundation
 
 **Goal:** The client silently records every focus session to a local JSON file. This is the data source for all AI work.
+
+**Status:** ✅ Implemented
 
 ### Steps
 

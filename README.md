@@ -123,11 +123,21 @@ cargo run --release
     - Windows path: `%APPDATA%\FocusTotem\sessions.json`
     - The file is a JSON array, ready for analytics/report generation later.
 
+*   **Analytics:**
+    - Run analytics without launching apps/wallpaper automation:
+        ```focus_client_rust/README.md#L1-1
+cargo run -- --analytics
+        ```
+    - Layer 1 statistical aggregation runs with 1+ session.
+    - Trend detection activates after 7+ calendar days.
+    - Decision-tree quality prediction activates after 30+ sessions.
+
 ## Project Files
 
 *   `Multithreaded_Dashboard.ino`: **The main, recommended firmware for the ESP32.**
 *   `src/main.rs`: The source code for the Rust desktop client (includes debug mock-mode logic and release real-device logic).
 *   `src/session.rs`: Focus session model and atomic JSON session logging.
+*   `src/analytics.rs`: Pure Rust analytics pipeline for session stats, trend detection, and quality prediction.
 *   `apps.toml`: Cross-platform app configuration loaded at runtime (`[apps].windows`, `[apps].linux`, etc.).
 *   `mock_server/`: Rust mock ESP32 server crate with `GET /status` and `GET /toggle` endpoints.
 *   `build.rs` & `manifest.xml`: Windows-specific build integration (manifest embedding only applies to Windows targets).
@@ -143,6 +153,7 @@ With the core automation in place, the next major goal is full system integratio
 -   [ ] **Package Client as a Background Service:** Create a true background process that starts automatically with Windows.
 -   [x] **Create a Configuration File:** App paths/commands are now loaded from `apps.toml` for easier cross-platform editing.
 -   [x] **Session Logging Foundation:** Completed focus sessions are written to `sessions.json` for future analytics.
+-   [x] **AI Analytics Foundation:** `--analytics` runs statistical aggregation now, with ML layers gated by data volume.
 
 ---
 _This project is now Rust-first: the desktop client and mock ESP32 server both live in this workspace._

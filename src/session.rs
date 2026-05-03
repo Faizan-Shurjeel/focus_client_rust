@@ -52,6 +52,10 @@ pub fn sessions_file_path() -> PathBuf {
     PathBuf::from("sessions.json")
 }
 
+pub fn load_sessions() -> io::Result<Vec<SessionRecord>> {
+    read_sessions(&sessions_file_path())
+}
+
 pub fn append_session(record: SessionRecord) -> io::Result<PathBuf> {
     let path = sessions_file_path();
 

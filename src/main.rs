@@ -1,5 +1,7 @@
+mod analytics;
 mod session;
 
+use analytics::{format_analytics, run_analytics};
 use chrono::{DateTime, Local};
 use lazy_static::lazy_static;
 use mdns_sd::{ServiceDaemon, ServiceEvent};
@@ -13,7 +15,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-use session::{append_session, SessionRecord};
+use session::{append_session, load_sessions, sessions_file_path, SessionRecord};
 
 #[cfg(debug_assertions)]
 const DEV_MODE: bool = true; // Enable for local development
@@ -441,7 +443,36 @@ fn discover_device(search_duration: Duration) -> Option<String> {
     None
 }
 
+fn run_analytics_cli() {
+    let path = sessions_file_path();
+    match load_sessions() {
+        Ok(sessions) => {
+            println!(
+                "Loaded {} session(s) from {}",
+                sessions.len(),
+                path.display()
+            );
+            let result = run_analytics(&sessions);
+            println!("{}", format_analytics(&result));
+        }
+        Err(e) => eprintln!(
+            "ERROR: Failed to load session log '{}': {}",
+            path.display(),
+            e
+        ),
+    }
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args
+        .iter()
+        .any(|arg| arg == "--analytics" || arg == "--report")
+    {
+        run_analytics_cli();
+        return;
+    }
+
     let http_client = Client::builder()
         .timeout(Duration::from_secs(2))
         .build()

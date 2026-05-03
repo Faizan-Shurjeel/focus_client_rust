@@ -11,7 +11,7 @@
 - ✅ `mock_server/` — Rust Axum mock server with `/status` and `/toggle` endpoints
 - ✅ `hello_gpui/` — GPUI UI experiment (parked, not integrated)
 - ✅ Session logging — implemented in `src/session.rs` with local JSON storage
-- ❌ AI analytics — not implemented
+- ✅ AI analytics — implemented in `src/analytics.rs`
 - ❌ Report generation — not implemented
 - ✅ Rust mock server — implemented in `mock_server/`
 
@@ -93,6 +93,8 @@
 ## Phase 3 — AI Analytics: Pure Rust with `linfa`
 
 **Goal:** K-means clustering on session data + peak-hour detection. Zero Python.
+
+**Status:** Superseded by `ROADMAP-new.md`; implemented as a 3-layer analytics stack in `src/analytics.rs`.
 
 ### Add to `Cargo.toml`
 ```toml

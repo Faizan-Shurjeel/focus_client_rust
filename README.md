@@ -83,15 +83,14 @@ windows = [
 ]
 
 linux = [
-  "gedit",
-  "firefox"
+  "brave-browser"
 ]
         ```
 
 *   **Build and Run (Mock Mode for ESP32-free development):**
-    1.  Start the local mock server:
+    1.  Start the Rust mock server:
         ```focus_client_rust/README.md#L1-1
-python3 mock_esp32.py
+cargo run -p mock_server
         ```
     2.  In another terminal, run the Rust client in debug mode:
         ```focus_client_rust/README.md#L1-1
@@ -99,9 +98,13 @@ cargo run
         ```
     3.  In debug mode, the client prints a development banner and polls:
         - `http://localhost:8080/status`
-        - Expected response: `FOCUS_ON`
-    4.  Stop the mock server (`Ctrl+C`) to simulate device disconnect and verify deactivation behavior.
-    5.  On GNOME-based Linux distros (like Zorin), wallpaper switching uses the `wallpaper` crate first, then falls back to `gsettings` (`org.gnome.desktop.background`) for better compatibility.
+        - Expected response: `FOCUS_ON` or `FOCUS_OFF`
+    4.  Toggle focus state without stopping the mock server:
+        ```focus_client_rust/README.md#L1-1
+curl http://localhost:8080/toggle
+        ```
+    5.  Stop the mock server (`Ctrl+C`) to simulate device disconnect and verify disconnect behavior.
+    6.  On GNOME-based Linux distros (like Zorin), wallpaper switching uses `gsettings` first, then falls back to the `wallpaper` crate for better compatibility.
 
 *   **Build and Run (Real ESP32 mode):**
     1.  Build/run in release mode:
@@ -116,7 +119,7 @@ cargo run --release
 *   `Multithreaded_Dashboard.ino`: **The main, recommended firmware for the ESP32.**
 *   `src/main.rs`: The source code for the Rust desktop client (includes debug mock-mode logic and release real-device logic).
 *   `apps.toml`: Cross-platform app configuration loaded at runtime (`[apps].windows`, `[apps].linux`, etc.).
-*   `mock_esp32.py`: Local mock server that simulates `GET /status -> FOCUS_ON`.
+*   `mock_server/`: Rust mock ESP32 server crate with `GET /status` and `GET /toggle` endpoints.
 *   `build.rs` & `manifest.xml`: Windows-specific build integration (manifest embedding only applies to Windows targets).
 *   `totem.cpp`: The original, single-threaded ESP32 code (for historical reference).
 
@@ -131,4 +134,4 @@ With the core automation in place, the next major goal is full system integratio
 -   [x] **Create a Configuration File:** App paths/commands are now loaded from `apps.toml` for easier cross-platform editing.
 
 ---
-_This project is being developed in parallel with a [Python version](https://github.com/Faizan-Shurjeel/focus_client_python) to compare language ergonomics and performance._
+_This project is now Rust-first: the desktop client and mock ESP32 server both live in this workspace._

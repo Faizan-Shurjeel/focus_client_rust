@@ -3,6 +3,10 @@ name = "focus_client_rust"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = [".", "mock_server"]
+resolver = "2"
+
 [dependencies]
 lazy_static = "1.5.0"
 mdns-sd = "0.15.1" # For mDNS service discovery

@@ -46,6 +46,7 @@ A lightweight, highly reliable background application that runs on your desktop.
 | ✅ Backward-compatible `/status` endpoint | ✅ **Application Launching & Closing** |
 | | ✅ Cross-platform app config via `apps.toml` |
 | | ✅ Local JSON session logging |
+| | ✅ Pure Rust analytics via `--analytics` |
 
 ## Setup and Usage
 
@@ -61,12 +62,12 @@ A lightweight, highly reliable background application that runs on your desktop.
 
 ### 2. Prepare and Run the Rust Client
 
-The Rust client supports two runtime modes:
+The Rust client supports two compile-time runtime modes controlled by the `DEV_MODE` constant in `src/main.rs`:
 
-- **Mock Mode (default in debug builds):** Uses a local mock endpoint at `http://localhost:8080/status` so you can test wallpaper/app automation without ESP32 hardware.
-- **Real Mode (release builds):** Uses mDNS discovery to find the physical `focus-totem` device on your network.
+- **Development / Mock Mode:** Enabled automatically in debug builds (`cargo run`). The client skips mDNS and polls the local Rust mock server at `http://localhost:8080/status`.
+- **Production / Real ESP32 Mode:** Enabled automatically in release builds (`cargo run --release` or `cargo build --release`). The client uses mDNS discovery to find the physical `focus-totem` device on your network.
 
-On Windows, if you need stronger process-control behavior for protected apps, run the executable as Administrator.
+On Windows, if you need stronger process-control behavior for protected apps, run the release executable as Administrator.
 
 *   **Prerequisites:**
     *   Rust Toolchain (via [rustup](https://www.rust-lang.org/tools/install)).
@@ -89,32 +90,42 @@ linux = [
 ]
         ```
 
-*   **Build and Run (Mock Mode for ESP32-free development):**
-    1.  Start the Rust mock server:
+*   **Development / Mock Environment (no ESP32 required):**
+    1.  Start the Rust mock ESP32 server in terminal 1:
         ```focus_client_rust/README.md#L1-1
 cargo run -p mock_server
         ```
-    2.  In another terminal, run the Rust client in debug mode:
+    2.  Start the desktop client in terminal 2:
         ```focus_client_rust/README.md#L1-1
 cargo run
         ```
     3.  In debug mode, the client prints a development banner and polls:
         - `http://localhost:8080/status`
         - Expected response: `FOCUS_ON` or `FOCUS_OFF`
-    4.  Toggle focus state without stopping the mock server:
+    4.  Toggle focus on/off without stopping the mock server:
         ```focus_client_rust/README.md#L1-1
 curl http://localhost:8080/toggle
         ```
     5.  Stop the mock server (`Ctrl+C`) to simulate device disconnect and verify disconnect behavior.
     6.  On GNOME-based Linux distros (like Zorin), wallpaper switching uses `gsettings` first, then falls back to the `wallpaper` crate for better compatibility.
 
-*   **Build and Run (Real ESP32 mode):**
-    1.  Build/run in release mode:
-        ```focus_client_rust/README.md#L1-2
-cargo build --release
+*   **Production / Real ESP32 Mode:**
+    1.  Flash and power on the ESP32 firmware first so it advertises `focus-totem` on your network.
+    2.  Run the client in release mode:
+        ```focus_client_rust/README.md#L1-1
 cargo run --release
         ```
-    2.  In this mode, the client uses normal mDNS discovery (`focus-totem`) and polls the real `/status` endpoint.
+    3.  Or build the release binary and run it directly on Linux:
+        ```focus_client_rust/README.md#L1-2
+cargo build --release
+./target/release/focus_client_rust
+        ```
+    4.  On Windows, build release and run the generated executable, preferably as Administrator if app termination needs elevated permissions:
+        ```focus_client_rust/README.md#L1-2
+cargo build --release
+target\release\focus_client_rust.exe
+        ```
+    5.  In release mode, the client does **not** use the mock server. It uses normal mDNS discovery (`focus-totem`) and polls the real ESP32 `/status` endpoint.
 
 *   **Session Logs:**
     - A completed focus session is recorded when focus mode deactivates.
@@ -124,10 +135,11 @@ cargo run --release
     - The file is a JSON array, ready for analytics/report generation later.
 
 *   **Analytics:**
-    - Run analytics without launching apps/wallpaper automation:
+    - Run analytics without launching apps, changing wallpaper, or polling the ESP32/mock server:
         ```focus_client_rust/README.md#L1-1
 cargo run -- --analytics
         ```
+    - `--report` currently aliases the same analytics output until the HTML report generator is implemented.
     - Layer 1 statistical aggregation runs with 1+ session.
     - Trend detection activates after 7+ calendar days.
     - Decision-tree quality prediction activates after 30+ sessions.

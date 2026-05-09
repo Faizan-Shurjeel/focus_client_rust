@@ -28,13 +28,14 @@ The brain of the physical device. This is a robust, multi-threaded application b
 
 ### Rust Client (`src/main.rs`)
 
-A lightweight, highly reliable background application that runs on your desktop.
+A lightweight, highly reliable async background application that runs on your desktop.
 *   **Automatic Discovery:** Uses mDNS to find the `focus-totem` on the network.
-*   **State Tracking:** Polls the totem's `/status` endpoint to track its online status.
+*   **Async Network Polling:** Powered by `tokio`, gracefully monitoring the totem's `/status` endpoint with a built-in "strike" system for network jitter.
 *   **Cross-Platform Automation Engine (Windows + Linux):** Based on the totem's state, it executes powerful workflows:
-    *   **Application Control:** Loads app commands/paths from `apps.toml`, launches the configured list, and closes them when focus mode is deactivated.
+    *   **Application Control:** Just-in-Time (JIT) loading of app commands/paths from `apps.toml`, launches the configured list, and closes them when focus mode is deactivated.
     *   **Wallpaper Management:** Changes and restores the desktop wallpaper.
     *   **Session Logging:** Records every completed focus session to a local JSON file for future analytics/reporting.
+    *   **Graceful Shutdown:** Intercepts `Ctrl+C` to ensure your wallpaper is restored and session is saved correctly before exiting.
 
 ## Key Features Implemented
 
@@ -44,9 +45,11 @@ A lightweight, highly reliable background application that runs on your desktop.
 | ✅ Material Design 3 Web Dashboard | ✅ Real-time State Tracking |
 | ✅ Real-time JSON API for status | ✅ **Dynamic Wallpaper Changing** |
 | ✅ Backward-compatible `/status` endpoint | ✅ **Application Launching & Closing** |
-| | ✅ Cross-platform app config via `apps.toml` |
+| | ✅ Cross-platform JIT app config via `apps.toml` |
 | | ✅ Local JSON session logging |
 | | ✅ Pure Rust analytics via `--analytics` |
+| | ✅ Fully async with `tokio` |
+| | ✅ Graceful shutdown and state restoration |
 
 ## Setup and Usage
 

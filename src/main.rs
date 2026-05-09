@@ -5,15 +5,15 @@ use analytics::{format_analytics, run_analytics};
 use chrono::{DateTime, Local};
 use lazy_static::lazy_static;
 use mdns_sd::{ServiceDaemon, ServiceEvent};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::Deserialize;
 use std::fs;
 #[cfg(target_os = "windows")]
 use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
-use std::thread;
 use std::time::Duration;
+use tokio;
 
 use session::{append_session, load_sessions, sessions_file_path, SessionRecord};
 
@@ -463,7 +463,8 @@ fn run_analytics_cli() {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args
         .iter()
@@ -478,15 +479,13 @@ fn main() {
         .build()
         .expect("Failed to build HTTP client");
 
-    let focus_apps = load_focus_apps();
-
     let mut is_focused = false;
     let mut esp32_address: Option<String> = None;
     let mut session_start: Option<DateTime<Local>> = None;
+    let mut failed_pings = 0;
 
     println!("Starting Focus Mode client (Rust version)...");
     println!("Detected OS: {}", std::env::consts::OS);
-    println!("Configured apps: {:?}", focus_apps);
 
     if DEV_MODE {
         println!("==========================================");
@@ -496,88 +495,127 @@ fn main() {
         println!("==========================================");
     }
 
-    loop {
-        if DEV_MODE {
+    let run_main_loop = async {
+        loop {
+            // 1. Resolve Address
             if esp32_address.is_none() {
-                esp32_address = Some("http://localhost:8080/status".to_string());
-                if let Some(address) = &esp32_address {
-                    println!("[MOCK] Simulated ESP32 address: {}", address);
-                }
-            }
-
-            if let Some(address) = &esp32_address {
-                match http_client.get(address).send() {
-                    Ok(response) => {
-                        if response.status().is_success()
-                            && response.text().unwrap_or_default() == "FOCUS_ON"
-                        {
-                            if !is_focused {
-                                is_focused = true;
-                                println!("[MOCK] --- FOCUS MODE ACTIVATED ---");
-                                begin_focus_session(&mut session_start);
-                                activate_focus_mode(&focus_apps);
-                            }
-                        } else if is_focused {
-                            is_focused = false;
-                            println!("[MOCK] --- FOCUS MODE DEACTIVATED (non-FOCUS_ON) ---");
-                            deactivate_focus_mode(&focus_apps);
-                            end_focus_session(&mut session_start);
-                        }
+                if DEV_MODE {
+                    esp32_address = Some("http://localhost:8080/status".to_string());
+                    if let Some(address) = &esp32_address {
+                        println!("[MOCK] Simulated ESP32 address: {}", address);
                     }
-                    Err(e) => {
-                        eprintln!("[MOCK] Error polling mock ESP32: {:?}", e);
-                        if is_focused {
-                            is_focused = false;
-                            println!("[MOCK] --- FOCUS MODE DEACTIVATED ---");
-                            deactivate_focus_mode(&focus_apps);
-                            end_focus_session(&mut session_start);
-                        }
-                        esp32_address = None;
-                    }
-                }
-            }
-
-            thread::sleep(Duration::from_secs(3));
-            continue;
-        }
-
-        if esp32_address.is_none() {
-            println!("Searching for Focus Totem on the network...");
-            if let Some(found_address) = discover_device(Duration::from_secs(5)) {
-                esp32_address = Some(found_address);
-            } else {
-                println!("Device not found. Will retry in 4 seconds.");
-                thread::sleep(Duration::from_secs(4));
-            }
-        }
-
-        if let Some(address) = &esp32_address {
-            match http_client.get(address).send() {
-                Ok(response) => {
-                    if response.status().is_success()
-                        && response.text().unwrap_or_default() == "FOCUS_ON"
+                } else {
+                    println!("Searching for Focus Totem on the network...");
+                    // mDNS discovery is sync, spawn blocking
+                    if let Ok(Some(found_address)) =
+                        tokio::task::spawn_blocking(|| discover_device(Duration::from_secs(5)))
+                            .await
                     {
-                        if !is_focused {
-                            is_focused = true;
-                            println!("--- FOCUS MODE ACTIVATED ---");
-                            begin_focus_session(&mut session_start);
-                            activate_focus_mode(&focus_apps);
+                        esp32_address = Some(found_address);
+                    } else {
+                        println!("Device not found. Will retry in 4 seconds.");
+                        tokio::time::sleep(Duration::from_secs(4)).await;
+                        continue;
+                    }
+                }
+            }
+
+            // 2. Fetch State
+            let mut current_state = "ERROR".to_string();
+            if let Some(address) = &esp32_address {
+                match http_client.get(address).send().await {
+                    Ok(response) if response.status().is_success() => {
+                        current_state = response.text().await.unwrap_or_default();
+                        failed_pings = 0; // Reset strikes on success
+                    }
+                    Ok(_) | Err(_) => {
+                        failed_pings += 1;
+                        if failed_pings >= 3 {
+                            if DEV_MODE {
+                                eprintln!("[MOCK] Error polling mock ESP32 (3 strikes).");
+                            } else {
+                                println!("Lost connection to device (3 strikes). Returning to search mode.");
+                            }
+                            current_state = "ERROR".to_string();
+                            esp32_address = None; // Force re-discovery
+                        } else {
+                            // Keep previous state but don't reset address yet
+                            current_state = if is_focused {
+                                "FOCUS_ON".to_string()
+                            } else {
+                                "FOCUS_OFF".to_string()
+                            };
                         }
                     }
                 }
-                Err(_) => {
-                    if is_focused {
-                        is_focused = false;
-                        println!("--- FOCUS MODE DEACTIVATED ---");
-                        deactivate_focus_mode(&focus_apps);
-                        end_focus_session(&mut session_start);
-                    }
-                    println!("Lost connection to device. Returning to search mode.");
-                    esp32_address = None;
+            }
+
+            // 3. React to State (State Machine)
+            if current_state == "FOCUS_ON" && !is_focused {
+                is_focused = true;
+                if DEV_MODE {
+                    println!("[MOCK] --- FOCUS MODE ACTIVATED ---");
+                } else {
+                    println!("--- FOCUS MODE ACTIVATED ---");
                 }
+                begin_focus_session(&mut session_start);
+
+                // JIT load focus apps
+                let focus_apps = tokio::task::spawn_blocking(load_focus_apps)
+                    .await
+                    .unwrap_or_default();
+                let focus_apps_clone = focus_apps.clone();
+                tokio::task::spawn_blocking(move || activate_focus_mode(&focus_apps_clone))
+                    .await
+                    .unwrap();
+            } else if current_state != "FOCUS_ON" && current_state != "ERROR" && is_focused {
+                is_focused = false;
+                if DEV_MODE {
+                    println!("[MOCK] --- FOCUS MODE DEACTIVATED ---");
+                } else {
+                    println!("--- FOCUS MODE DEACTIVATED ---");
+                }
+
+                // JIT load focus apps for deactivation
+                let focus_apps = tokio::task::spawn_blocking(load_focus_apps)
+                    .await
+                    .unwrap_or_default();
+                let focus_apps_clone = focus_apps.clone();
+                tokio::task::spawn_blocking(move || deactivate_focus_mode(&focus_apps_clone))
+                    .await
+                    .unwrap();
+                end_focus_session(&mut session_start);
+            } else if current_state == "ERROR" && is_focused {
+                is_focused = false;
+                if DEV_MODE {
+                    println!("[MOCK] --- FOCUS MODE DEACTIVATED (ERROR) ---");
+                } else {
+                    println!("--- FOCUS MODE DEACTIVATED (ERROR) ---");
+                }
+
+                let focus_apps = tokio::task::spawn_blocking(load_focus_apps)
+                    .await
+                    .unwrap_or_default();
+                let focus_apps_clone = focus_apps.clone();
+                tokio::task::spawn_blocking(move || deactivate_focus_mode(&focus_apps_clone))
+                    .await
+                    .unwrap();
+                end_focus_session(&mut session_start);
+            }
+
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    };
+
+    tokio::select! {
+        _ = run_main_loop => {},
+        _ = tokio::signal::ctrl_c() => {
+            println!("Shutting down gracefully...");
+            if is_focused {
+                let focus_apps = load_focus_apps();
+                deactivate_focus_mode(&focus_apps);
+                end_focus_session(&mut session_start);
             }
         }
-
-        thread::sleep(Duration::from_secs(3));
     }
 }

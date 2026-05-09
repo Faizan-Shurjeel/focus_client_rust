@@ -109,6 +109,8 @@ fn write_sessions_atomically(path: &Path, sessions: &[SessionRecord]) -> io::Res
     #[cfg(target_os = "windows")]
     {
         if path.exists() {
+            let backup_path = path.with_extension("json.bak");
+            let _ = fs::copy(path, &backup_path); // Save a backup
             fs::remove_file(path)?;
         }
     }

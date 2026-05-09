@@ -6,7 +6,9 @@
 
 ## Current State Snapshot
 
-- ✅ `src/main.rs` — cross-platform client (Windows + Linux GNOME), `apps.toml` config, `DEV_MODE` compile flag, gsettings wallpaper fallback
+- ✅ `src/main.rs` — cross-platform async client (`tokio`) (Windows + Linux GNOME), `apps.toml` JIT config, `DEV_MODE` compile flag, gsettings wallpaper fallback
+- ✅ Graceful shutdown — Ctrl+C correctly restores wallpaper, closes apps, and saves session logs
+- ✅ Network jitter tolerance — 3-strike system for dropped packets before deactivating
 - ✅ `M3-Redesign.ino` — dual-core FreeRTOS firmware with Material Design 3 dashboard
 - ✅ `mock_server/` — Rust Axum mock server with `/status` and `/toggle` endpoints
 - ✅ `hello_gpui/` — GPUI UI experiment (parked, not integrated)
@@ -232,6 +234,8 @@ src/
 
 **Goal:** Replace the `blocking reqwest + thread::sleep` loop with proper async. Cleaner cancellation, lower resource usage, future-proofs the GUI path.
 
+**Status:** ✅ Implemented
+
 ### Steps
 
 - Add `tokio = { version = "1", features = ["full"] }` to main `Cargo.toml`
@@ -240,6 +244,7 @@ src/
 - Replace `thread::sleep(Duration::from_secs(3))` with `tokio::time::sleep(...).await`
 - The mDNS discovery (`mdns-sd`) uses its own thread internally — wrap `discover_device` in `tokio::task::spawn_blocking`
 - All automation functions (`activate_focus_mode`, `deactivate_focus_mode`) stay sync — call them from `spawn_blocking` since they shell out to OS commands
+- Implement graceful shutdown with `tokio::select!` and `tokio::signal::ctrl_c()` to restore state safely on exit.
 
 ### Why now and not earlier
 - The mock server (Phase 1) already uses tokio, so the dependency is already in the workspace
@@ -333,11 +338,11 @@ winreg = "0.52"                                            # Phase 7
 
 | Priority | Phase | Why first |
 |---|---|---|
-| 🔴 1 | **Phase 1** — Rust mock server | Unblocks ESP-free development immediately, kills Python dep |
-| 🔴 2 | **Phase 2** — Session logging | Everything downstream (AI, reports) depends on this data |
-| 🟠 3 | **Phase 5.1–5.3** — Housekeeping | Do this before the codebase gets bigger, or you'll regret it |
-| 🟠 4 | **Phase 3** — Analytics | Core AI module for the CEP proposal |
-| 🟠 5 | **Phase 4** — Report generator | Closes the AI loop, gives you something to demo |
-| 🟡 6 | **Phase 6** — Async refactor | Quality of life, needed before any GUI work |
+| ✅ 1 | **Phase 1** — Rust mock server | Unblocks ESP-free development immediately, kills Python dep |
+| ✅ 2 | **Phase 2** — Session logging | Everything downstream (AI, reports) depends on this data |
+| ✅ 3 | **Phase 6** — Async refactor & Graceful Shutdown | Tokio integration and ctrl+c handling (completed as part of hotfix wave) |
+| 🟠 4 | **Phase 5.1–5.3** — Housekeeping | Do this before the codebase gets bigger, or you'll regret it |
+| 🟠 5 | **Phase 3** — Analytics | Core AI module for the CEP proposal |
+| 🟠 6 | **Phase 4** — Report generator | Closes the AI loop, gives you something to demo |
 | 🟡 7 | **Phase 7** — Autostart | Usability polish |
 | 🟢 8 | **Phase 8** — ESP32 hardening | Hardware-dependent, do when device is available |

@@ -4,7 +4,7 @@
 #include <ArduinoJson.h>
 
 // --- IMPORTANT: CHANGE THESE TO YOUR WI-FI CREDENTIALS ---
-const char *ssid = "Faizy's A54";
+const char *ssid = "Faizy's A54 5G";
 const char *password = "12345678";
 
 WebServer server(80);

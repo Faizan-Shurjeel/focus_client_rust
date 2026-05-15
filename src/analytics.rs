@@ -18,6 +18,8 @@ pub struct AnalyticsResult {
     pub best_days: Vec<(u8, f32)>,
     pub weekly_total_minutes: f32,
     pub weekly_delta_minutes: f32,
+    pub weekly_session_count: usize,
+    pub last_7_day_totals: Vec<(NaiveDate, f32)>,
 
     // Layer 2 — None if < 7 calendar days of data
     pub trend_slope: Option<f32>,
@@ -61,6 +63,8 @@ fn label_session(session: &SessionRecord) -> SessionQuality {
 
 pub fn run_analytics(sessions: &[SessionRecord]) -> AnalyticsResult {
     let total_sessions = sessions.len();
+    let daily_totals = daily_totals(sessions);
+    let last_7_day_totals = last_7_day_totals(&daily_totals);
 
     if sessions.is_empty() {
         return AnalyticsResult {
@@ -70,6 +74,8 @@ pub fn run_analytics(sessions: &[SessionRecord]) -> AnalyticsResult {
             best_days: Vec::new(),
             weekly_total_minutes: 0.0,
             weekly_delta_minutes: 0.0,
+            weekly_session_count: 0,
+            last_7_day_totals,
             trend_slope: None,
             trend_label: None,
             tree_rules: None,
@@ -80,8 +86,8 @@ pub fn run_analytics(sessions: &[SessionRecord]) -> AnalyticsResult {
     let distraction_rate = distraction_rate(sessions);
     let top_focus_hours = top_focus_hours(sessions);
     let best_days = best_days(sessions);
-    let (weekly_total_minutes, weekly_delta_minutes) = weekly_summary(sessions);
-    let daily_totals = daily_totals(sessions);
+    let (weekly_total_minutes, weekly_delta_minutes, weekly_session_count) =
+        weekly_summary(sessions);
     let (trend_slope, trend_label) = trend_detection(&daily_totals)
         .map(|(slope, label)| (Some(slope), Some(label)))
         .unwrap_or((None, None));
@@ -96,6 +102,8 @@ pub fn run_analytics(sessions: &[SessionRecord]) -> AnalyticsResult {
         best_days,
         weekly_total_minutes,
         weekly_delta_minutes,
+        weekly_session_count,
+        last_7_day_totals,
         trend_slope,
         trend_label,
         tree_rules,
@@ -119,8 +127,9 @@ pub fn format_analytics(result: &AnalyticsResult) -> String {
         }
     ));
     lines.push(format!(
-        "This week: {} ({})",
+        "This week: {} across {} session(s) ({})",
         format_minutes(result.weekly_total_minutes),
+        result.weekly_session_count,
         format_delta_minutes(result.weekly_delta_minutes)
     ));
 
@@ -238,7 +247,7 @@ fn best_days(sessions: &[SessionRecord]) -> Vec<(u8, f32)> {
     scored
 }
 
-fn weekly_summary(sessions: &[SessionRecord]) -> (f32, f32) {
+fn weekly_summary(sessions: &[SessionRecord]) -> (f32, f32, usize) {
     let now = Local::now();
     let current_week_start_date =
         now.date_naive() - ChronoDuration::days(now.weekday().num_days_from_monday() as i64);
@@ -249,17 +258,23 @@ fn weekly_summary(sessions: &[SessionRecord]) -> (f32, f32) {
 
     let mut current_week_total = 0.0;
     let mut previous_week_total = 0.0;
+    let mut current_week_sessions = 0;
 
     for session in sessions {
         let start = session.start_time.naive_local();
         if start >= current_week_start {
             current_week_total += session.duration_minutes;
+            current_week_sessions += 1;
         } else if start >= previous_week_start && start < current_week_start {
             previous_week_total += session.duration_minutes;
         }
     }
 
-    (current_week_total, current_week_total - previous_week_total)
+    (
+        current_week_total,
+        current_week_total - previous_week_total,
+        current_week_sessions,
+    )
 }
 
 fn daily_totals(sessions: &[SessionRecord]) -> BTreeMap<NaiveDate, f32> {
@@ -270,16 +285,34 @@ fn daily_totals(sessions: &[SessionRecord]) -> BTreeMap<NaiveDate, f32> {
     totals
 }
 
+fn last_7_day_totals(daily_totals: &BTreeMap<NaiveDate, f32>) -> Vec<(NaiveDate, f32)> {
+    let today = Local::now().date_naive();
+    (0..7)
+        .rev()
+        .map(|days_ago| {
+            let date = today - ChronoDuration::days(days_ago);
+            let minutes = daily_totals.get(&date).copied().unwrap_or(0.0);
+            (date, minutes)
+        })
+        .collect()
+}
+
 fn trend_detection(daily_totals: &BTreeMap<NaiveDate, f32>) -> Option<(f32, String)> {
-    let n_days = daily_totals.len();
+    let (&start_date, _) = daily_totals.first_key_value()?;
+    let (&end_date, _) = daily_totals.last_key_value()?;
+    let calendar_days = end_date.signed_duration_since(start_date).num_days() + 1;
+    let n_days = usize::try_from(calendar_days).ok()?;
+
     if n_days < TREND_MIN_DAYS {
         return None;
     }
 
     let day_indices: Vec<f64> = (0..n_days).map(|i| i as f64).collect();
-    let totals: Vec<f64> = daily_totals
-        .values()
-        .map(|minutes| *minutes as f64)
+    let totals: Vec<f64> = (0..n_days)
+        .map(|offset| {
+            let date = start_date + ChronoDuration::days(offset as i64);
+            daily_totals.get(&date).copied().unwrap_or(0.0) as f64
+        })
         .collect();
 
     let x = Array2::from_shape_vec((n_days, 1), day_indices).ok()?;

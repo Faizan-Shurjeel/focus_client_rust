@@ -32,7 +32,7 @@ A lightweight, highly reliable async background application that runs on your de
 *   **Automatic Discovery:** Uses mDNS to find the `focus-totem` on the network.
 *   **Async Network Polling:** Powered by `tokio`, gracefully monitoring the totem's `/status` endpoint with a built-in "strike" system for network jitter.
 *   **Cross-Platform Automation Engine (Windows + Linux):** Based on the totem's state, it executes powerful workflows:
-    *   **Application Control:** Just-in-Time (JIT) loading of app commands/paths from `apps.toml`, launches the configured list, and closes them when focus mode is deactivated.
+    *   **Application Control:** Just-in-Time (JIT) loading of app commands/paths from `apps.toml` on activation, then reuses that active-session list when focus mode is deactivated.
     *   **Wallpaper Management:** Changes and restores the desktop wallpaper.
     *   **Session Logging:** Records every completed focus session to a local JSON file for future analytics/reporting.
     *   **Graceful Shutdown:** Intercepts `Ctrl+C` to ensure your wallpaper is restored and session is saved correctly before exiting.
@@ -48,6 +48,7 @@ A lightweight, highly reliable async background application that runs on your de
 | | ✅ Cross-platform JIT app config via `apps.toml` |
 | | ✅ Local JSON session logging |
 | | ✅ Pure Rust analytics via `--analytics` |
+| | ✅ Styled HTML Focus Health Report via `--report` |
 | | ✅ Fully async with `tokio` |
 | | ✅ Graceful shutdown and state restoration |
 
@@ -137,12 +138,20 @@ target\release\focus_client_rust.exe
     - Windows path: `%APPDATA%\FocusTotem\sessions.json`
     - The file is a JSON array, ready for analytics/report generation later.
 
-*   **Analytics:**
-    - Run analytics without launching apps, changing wallpaper, or polling the ESP32/mock server:
+*   **Analytics & Report Generation:**
+    - Run terminal analytics without launching apps, changing wallpaper, or polling the ESP32/mock server:
         ```focus_client_rust/README.md#L1-1
 cargo run -- --analytics
         ```
-    - `--report` currently aliases the same analytics output until the HTML report generator is implemented.
+    - Generate and open the styled HTML Focus Health Report:
+        ```focus_client_rust/README.md#L1-1
+cargo run -- --report
+        ```
+    - Show available CLI commands:
+        ```focus_client_rust/README.md#L1-1
+cargo run -- h
+        ```
+    - When using dash-prefixed app flags through Cargo, put `--` before the app flag, e.g. `cargo run --release -- --a`. Without that separator, Cargo consumes the flag before the client sees it.
     - Layer 1 statistical aggregation runs with 1+ session.
     - Trend detection activates after 7+ calendar days.
     - Decision-tree quality prediction activates after 30+ sessions.
@@ -150,9 +159,14 @@ cargo run -- --analytics
 ## Project Files
 
 *   `Multithreaded_Dashboard.ino`: **The main, recommended firmware for the ESP32.**
-*   `src/main.rs`: The source code for the Rust desktop client (includes debug mock-mode logic and release real-device logic).
+*   `src/main.rs`: Async entry point, CLI flag dispatch, polling state machine, and graceful shutdown coordination.
+*   `src/config.rs`: Just-in-Time loading of cross-platform focus app configuration from `apps.toml`.
+*   `src/automation.rs`: Wallpaper, application launch, and application termination automation.
+*   `src/discovery.rs`: mDNS discovery for the physical Focus Totem device.
+*   `src/totem.rs`: HTTP state polling and `FOCUS_ON`/`FOCUS_OFF` response parsing.
 *   `src/session.rs`: Focus session model and atomic JSON session logging.
 *   `src/analytics.rs`: Pure Rust analytics pipeline for session stats, trend detection, and quality prediction.
+*   `src/report.rs`: Monolithic Precision HTML Focus Health Report generator and browser launcher.
 *   `apps.toml`: Cross-platform app configuration loaded at runtime (`[apps].windows`, `[apps].linux`, etc.).
 *   `mock_server/`: Rust mock ESP32 server crate with `GET /status` and `GET /toggle` endpoints.
 *   `build.rs` & `manifest.xml`: Windows-specific build integration (manifest embedding only applies to Windows targets).
@@ -169,6 +183,7 @@ With the core automation in place, the next major goal is full system integratio
 -   [x] **Create a Configuration File:** App paths/commands are now loaded from `apps.toml` for easier cross-platform editing.
 -   [x] **Session Logging Foundation:** Completed focus sessions are written to `sessions.json` for future analytics.
 -   [x] **AI Analytics Foundation:** `--analytics` runs statistical aggregation now, with ML layers gated by data volume.
+-   [x] **Focus Health Report:** `--report` generates and opens the styled HTML report.
 
 ---
 _This project is now Rust-first: the desktop client and mock ESP32 server both live in this workspace._

@@ -1,391 +1,239 @@
 mod analytics;
+mod automation;
+mod config;
+mod discovery;
+mod report;
 mod session;
+mod totem;
 
 use analytics::{format_analytics, run_analytics};
+use automation::{activate_focus_mode, deactivate_focus_mode};
 use chrono::{DateTime, Local};
-use lazy_static::lazy_static;
-use mdns_sd::{ServiceDaemon, ServiceEvent};
+use config::load_focus_apps;
+use discovery::discover_device;
 use reqwest::Client;
-use serde::Deserialize;
-use std::fs;
-#[cfg(target_os = "windows")]
-use std::path::Path;
-use std::process::Command;
-use std::sync::Mutex;
-use std::time::Duration;
-use tokio;
-
 use session::{append_session, load_sessions, sessions_file_path, SessionRecord};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::Duration;
+use tokio::sync::Notify;
+use totem::{fetch_state as poll_totem_state, TotemState};
 
 #[cfg(debug_assertions)]
-const DEV_MODE: bool = true; // Enable for local development
+const DEV_MODE: bool = false; // Enable for local development
 #[cfg(not(debug_assertions))]
 const DEV_MODE: bool = false; // Disable for release/production
 
-// --- Configuration ---
-const SERVICE_NAME: &str = "_http._tcp.local.";
-const DEVICE_HOSTNAME: &str = "focus-totem";
-const FOCUS_WALLPAPER_NAME: &str = "focus_wallpaper.jpg";
-const APPS_CONFIG_FILE: &str = "apps.toml";
+const MOCK_STATUS_ENDPOINT: &str = "http://localhost:8080/status";
+const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
+const DISCOVERY_RETRY_DELAY: Duration = Duration::from_secs(4);
+const POLL_INTERVAL: Duration = Duration::from_secs(3);
+const MAX_FAILED_PINGS: u8 = 3;
 
-lazy_static! {
-    static ref ORIGINAL_WALLPAPER_PATH: Mutex<Option<String>> = Mutex::new(None);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CliCommand {
+    Run,
+    Analytics,
+    Report,
+    Help,
 }
 
-#[derive(Debug, Deserialize)]
-struct AppsConfig {
-    apps: std::collections::HashMap<String, Vec<String>>,
+struct FocusClient {
+    http_client: Client,
+    is_focused: bool,
+    esp32_address: Option<String>,
+    session_start: Option<DateTime<Local>>,
+    failed_pings: u8,
+    active_focus_apps: Vec<String>,
 }
 
-fn default_focus_apps() -> Vec<String> {
-    #[cfg(target_os = "windows")]
-    {
-        vec![
-            r"C:\Windows\System32\notepad.exe".to_string(),
-            r"C:\Users\Faizy\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe"
-                .to_string(),
-        ]
+impl FocusClient {
+    fn new(http_client: Client) -> Self {
+        Self {
+            http_client,
+            is_focused: false,
+            esp32_address: None,
+            session_start: None,
+            failed_pings: 0,
+            active_focus_apps: Vec::new(),
+        }
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        vec!["brave-browser".to_string()]
+    async fn tick(&mut self, shutdown_notify: &Notify) {
+        let Some(state) = self.resolve_and_fetch_state(shutdown_notify).await else {
+            return;
+        };
+
+        self.react_to_state(state).await;
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        vec!["TextEdit".to_string(), "Google Chrome".to_string()]
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    {
-        vec![]
-    }
-}
-
-fn parse_apps_config(contents: &str) -> Result<AppsConfig, toml::de::Error> {
-    toml::from_str(contents)
-}
-
-fn select_apps_for_current_os(config: &AppsConfig) -> Option<Vec<String>> {
-    config.apps.get(std::env::consts::OS).cloned()
-}
-
-fn sanitize_apps(apps: Vec<String>) -> Vec<String> {
-    apps.into_iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-fn load_focus_apps() -> Vec<String> {
-    match fs::read_to_string(APPS_CONFIG_FILE) {
-        Ok(contents) => match parse_apps_config(&contents) {
-            Ok(config) => {
-                let selected = select_apps_for_current_os(&config).unwrap_or_default();
-                let cleaned = sanitize_apps(selected);
-                if cleaned.is_empty() {
-                    let defaults = default_focus_apps();
-                    println!(
-                        "No apps configured for OS '{}' in '{}'. Using {} default app(s).",
-                        std::env::consts::OS,
-                        APPS_CONFIG_FILE,
-                        defaults.len()
-                    );
-                    defaults
-                } else {
-                    println!(
-                        "Loaded {} app(s) for OS '{}' from '{}'.",
-                        cleaned.len(),
-                        std::env::consts::OS,
-                        APPS_CONFIG_FILE
-                    );
-                    cleaned
+    async fn resolve_and_fetch_state(&mut self, shutdown_notify: &Notify) -> Option<TotemState> {
+        if self.esp32_address.is_none() {
+            if DEV_MODE {
+                self.esp32_address = Some(MOCK_STATUS_ENDPOINT.to_string());
+                println!("[MOCK] Simulated ESP32 address: {}", MOCK_STATUS_ENDPOINT);
+            } else {
+                println!("Searching for Focus Totem on the network...");
+                let discovery_task =
+                    tokio::task::spawn_blocking(|| discover_device(DISCOVERY_TIMEOUT));
+                match wait_for_discovery(discovery_task, shutdown_notify).await {
+                    Some(found_address) => self.esp32_address = Some(found_address),
+                    None => return None,
                 }
+            }
+        }
+
+        self.fetch_state(shutdown_notify).await
+    }
+
+    async fn fetch_state(&mut self, shutdown_notify: &Notify) -> Option<TotemState> {
+        let address = self.esp32_address.as_ref()?;
+
+        let poll_result = tokio::select! {
+            result = poll_totem_state(&self.http_client, address) => result,
+            _ = shutdown_notify.notified() => return None,
+        };
+
+        match poll_result {
+            Ok(state) => {
+                self.failed_pings = 0;
+                Some(state)
+            }
+            Err(e) => self.register_failed_ping(e.to_string()),
+        }
+    }
+
+    fn register_failed_ping(&mut self, reason: String) -> Option<TotemState> {
+        self.failed_pings = self.failed_pings.saturating_add(1);
+
+        if self.failed_pings >= MAX_FAILED_PINGS {
+            if DEV_MODE {
+                eprintln!(
+                    "[MOCK] Error polling mock ESP32 after {} strike(s): {}",
+                    self.failed_pings, reason
+                );
+            } else {
+                println!(
+                    "Lost connection to device after {} strike(s): {}. Returning to search mode.",
+                    self.failed_pings, reason
+                );
+            }
+
+            self.failed_pings = 0;
+            self.esp32_address = None;
+            Some(TotemState::Error)
+        } else {
+            println!(
+                "Polling strike {}/{}: {}. Holding current focus state.",
+                self.failed_pings, MAX_FAILED_PINGS, reason
+            );
+            Some(if self.is_focused {
+                TotemState::FocusOn
+            } else {
+                TotemState::FocusOff
+            })
+        }
+    }
+
+    async fn react_to_state(&mut self, state: TotemState) {
+        if state == TotemState::FocusOn && !self.is_focused {
+            self.is_focused = true;
+            print_focus_transition(true, state);
+            begin_focus_session(&mut self.session_start);
+            self.active_focus_apps = activate_with_jit_config().await;
+        } else if state != TotemState::FocusOn && self.is_focused {
+            self.is_focused = false;
+            print_focus_transition(false, state);
+            let focus_apps = self.apps_to_deactivate().await;
+            deactivate_with_focus_apps(focus_apps).await;
+            end_focus_session(&mut self.session_start);
+        }
+    }
+
+    async fn shutdown_gracefully(&mut self) {
+        println!("Shutting down gracefully...");
+        if self.is_focused {
+            self.is_focused = false;
+            let focus_apps = self.apps_to_deactivate().await;
+            deactivate_with_focus_apps(focus_apps).await;
+            end_focus_session(&mut self.session_start);
+        }
+    }
+
+    async fn apps_to_deactivate(&mut self) -> Vec<String> {
+        if self.active_focus_apps.is_empty() {
+            load_focus_apps_async().await
+        } else {
+            std::mem::take(&mut self.active_focus_apps)
+        }
+    }
+}
+
+async fn wait_for_discovery(
+    discovery_task: tokio::task::JoinHandle<Option<String>>,
+    shutdown_notify: &Notify,
+) -> Option<String> {
+    tokio::select! {
+        result = discovery_task => match result {
+            Ok(Some(found_address)) => Some(found_address),
+            Ok(None) => {
+                println!("Device not found. Will retry in {} seconds.", DISCOVERY_RETRY_DELAY.as_secs());
+                None
             }
             Err(e) => {
-                eprintln!(
-                    "ERROR: Could not parse '{}': {}. Falling back to defaults.",
-                    APPS_CONFIG_FILE, e
-                );
-                default_focus_apps()
+                eprintln!("ERROR: Device discovery task failed: {}", e);
+                None
             }
         },
+        _ = shutdown_notify.notified() => None,
+    }
+}
+
+fn print_focus_transition(activated: bool, state: TotemState) {
+    let action = if activated {
+        "ACTIVATED"
+    } else {
+        "DEACTIVATED"
+    };
+    let suffix = if state == TotemState::Error {
+        " (ERROR)"
+    } else {
+        ""
+    };
+
+    if DEV_MODE {
+        println!("[MOCK] --- FOCUS MODE {}{} ---", action, suffix);
+    } else {
+        println!("--- FOCUS MODE {}{} ---", action, suffix);
+    }
+}
+
+async fn activate_with_jit_config() -> Vec<String> {
+    let focus_apps = load_focus_apps_async().await;
+    let apps_for_activation = focus_apps.clone();
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || activate_focus_mode(&apps_for_activation)).await
+    {
+        eprintln!("ERROR: Focus activation task failed: {}", e);
+    }
+    focus_apps
+}
+
+async fn deactivate_with_focus_apps(focus_apps: Vec<String>) {
+    if let Err(e) = tokio::task::spawn_blocking(move || deactivate_focus_mode(&focus_apps)).await {
+        eprintln!("ERROR: Focus deactivation task failed: {}", e);
+    }
+}
+
+async fn load_focus_apps_async() -> Vec<String> {
+    match tokio::task::spawn_blocking(load_focus_apps).await {
+        Ok(apps) => apps,
         Err(e) => {
-            eprintln!(
-                "ERROR: Could not read '{}': {}. Falling back to defaults.",
-                APPS_CONFIG_FILE, e
-            );
-            default_focus_apps()
-        }
-    }
-}
-
-fn launch_app(app: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        return Command::new("open").args(["-a", app]).spawn().map(|_| ());
-    }
-
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    {
-        return Command::new(app).spawn().map(|_| ());
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Unsupported OS: {}", std::env::consts::OS),
-        ))
-    }
-}
-
-fn terminate_app(app: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        let image_name = Path::new(app)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(app);
-
-        let output = Command::new("taskkill")
-            .args(["/F", "/IM", image_name])
-            .output()?;
-
-        if output.status.success() {
-            return Ok(());
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("taskkill failed for '{}': {}", image_name, stderr.trim()),
-        ));
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        let output = Command::new("pkill").args(["-f", app]).output()?;
-
-        // pkill exit code: 0 => matched/killed, 1 => no matching process (safe for us)
-        if output.status.success() || output.status.code() == Some(1) {
-            return Ok(());
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("pkill failed for '{}': {}", app, stderr.trim()),
-        ));
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Unsupported OS: {}", std::env::consts::OS),
-        ))
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn gsettings_get_wallpaper_uri() -> Option<String> {
-    let output = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.background", "picture-uri"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let trimmed = raw.trim_matches('\'').trim().to_string();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn gsettings_set_wallpaper_uri(uri: &str) -> bool {
-    let status = Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.background", "picture-uri", uri])
-        .status();
-
-    match status {
-        Ok(s) if s.success() => {
-            // Try dark-variant key as well (GNOME 42+ / some distros), ignore failure.
-            let _ = Command::new("gsettings")
-                .args([
-                    "set",
-                    "org.gnome.desktop.background",
-                    "picture-uri-dark",
-                    uri,
-                ])
-                .status();
-            true
-        }
-        _ => false,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn path_to_file_uri(path: &str) -> String {
-    let normalized = path.replace(' ', "%20");
-    if normalized.starts_with("file://") {
-        normalized
-    } else {
-        format!("file://{}", normalized)
-    }
-}
-
-fn save_original_wallpaper_path() {
-    if let Ok(path) = wallpaper::get() {
-        println!("Saved original wallpaper: {}", path);
-        *ORIGINAL_WALLPAPER_PATH.lock().unwrap() = Some(path);
-        return;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(uri) = gsettings_get_wallpaper_uri() {
-            println!("Saved original wallpaper from gsettings: {}", uri);
-            *ORIGINAL_WALLPAPER_PATH.lock().unwrap() = Some(uri);
-        }
-    }
-}
-
-fn set_focus_wallpaper() {
-    match fs::canonicalize(FOCUS_WALLPAPER_NAME) {
-        Ok(absolute_path) => {
-            let path_str = match absolute_path.to_str() {
-                Some(p) => p,
-                None => {
-                    eprintln!("ERROR: Focus wallpaper path contains invalid UTF-8.");
-                    return;
-                }
-            };
-
-            #[cfg(target_os = "linux")]
-            {
-                let uri = path_to_file_uri(path_str);
-                if gsettings_set_wallpaper_uri(&uri) {
-                    println!("Focus wallpaper has been set (gsettings primary).");
-                    return;
-                }
-
-                if wallpaper::set_from_path(path_str).is_ok() {
-                    println!("Focus wallpaper has been set (wallpaper crate fallback).");
-                    return;
-                }
-
-                eprintln!(
-                    "ERROR: Failed to set focus wallpaper using gsettings and wallpaper crate."
-                );
-                return;
-            }
-
-            #[cfg(not(target_os = "linux"))]
-            {
-                if wallpaper::set_from_path(path_str).is_ok() {
-                    println!("Focus wallpaper has been set (wallpaper crate).");
-                    return;
-                }
-
-                eprintln!("ERROR: Failed to set focus wallpaper using wallpaper crate.");
-            }
-        }
-        Err(e) => eprintln!(
-            "ERROR: Could not find wallpaper '{}': {}",
-            FOCUS_WALLPAPER_NAME, e
-        ),
-    }
-}
-
-fn restore_original_wallpaper() {
-    let mut original_path = ORIGINAL_WALLPAPER_PATH.lock().unwrap();
-    if let Some(path) = original_path.as_deref() {
-        #[cfg(target_os = "linux")]
-        {
-            let uri = if path.starts_with("file://") {
-                path.to_string()
-            } else {
-                path_to_file_uri(path)
-            };
-
-            if gsettings_set_wallpaper_uri(&uri) {
-                println!("Restored original wallpaper (gsettings primary): {}", uri);
-                *original_path = None;
-                return;
-            }
-
-            if wallpaper::set_from_path(path).is_ok() {
-                println!(
-                    "Restored original wallpaper (wallpaper crate fallback): {}",
-                    path
-                );
-                *original_path = None;
-                return;
-            }
-
-            eprintln!(
-                "ERROR: Failed to restore original wallpaper using gsettings and wallpaper crate."
-            );
-            *original_path = None;
-            return;
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            if wallpaper::set_from_path(path).is_ok() {
-                println!("Restored original wallpaper (wallpaper crate): {}", path);
-                *original_path = None;
-                return;
-            }
-
-            eprintln!("ERROR: Failed to restore original wallpaper using wallpaper crate.");
-        }
-    }
-
-    *original_path = None;
-}
-
-fn activate_focus_mode(focus_apps: &[String]) {
-    println!("Activating focus mode automations...");
-
-    // Save current wallpaper so we can restore it later
-    save_original_wallpaper_path();
-
-    // Set focus wallpaper (with Linux GNOME fallback)
-    set_focus_wallpaper();
-
-    // Launch apps
-    println!(
-        "Launching focus applications for {}...",
-        std::env::consts::OS
-    );
-    for app in focus_apps {
-        match launch_app(app) {
-            Ok(_) => println!("Successfully launched '{}'", app),
-            Err(e) => eprintln!("ERROR: Failed to launch '{}': {}", app, e),
-        }
-    }
-}
-
-fn deactivate_focus_mode(focus_apps: &[String]) {
-    println!("Deactivating focus mode automations...");
-
-    // Restore wallpaper (with Linux GNOME fallback)
-    restore_original_wallpaper();
-
-    // Close apps
-    println!("Closing focus applications for {}...", std::env::consts::OS);
-    for app in focus_apps {
-        if let Err(e) = terminate_app(app) {
-            eprintln!("ERROR: Failed to close '{}': {}", app, e);
+            eprintln!("ERROR: Focus app config loading task failed: {}", e);
+            Vec::new()
         }
     }
 }
@@ -419,30 +267,6 @@ fn end_focus_session(session_start: &mut Option<DateTime<Local>>) {
     }
 }
 
-fn discover_device(search_duration: Duration) -> Option<String> {
-    let mdns = ServiceDaemon::new().expect("Failed to create mDNS daemon");
-    let receiver = mdns
-        .browse(SERVICE_NAME)
-        .expect("Failed to browse for service");
-    let start_time = std::time::Instant::now();
-
-    while start_time.elapsed() < search_duration {
-        if let Ok(event) = receiver.recv_timeout(Duration::from_secs(1)) {
-            if let ServiceEvent::ServiceResolved(info) = event {
-                if info.get_fullname().contains(DEVICE_HOSTNAME) {
-                    let ip = info.get_addresses().iter().next()?;
-                    let port = info.get_port();
-                    let url = format!("http://{}:{}/status", ip, port);
-                    println!("Resolved Focus Totem address: {}", url);
-                    return Some(url);
-                }
-            }
-        }
-    }
-
-    None
-}
-
 fn run_analytics_cli() {
     let path = sessions_file_path();
     match load_sessions() {
@@ -463,26 +287,106 @@ fn run_analytics_cli() {
     }
 }
 
+fn print_usage() {
+    println!("Focus Totem client");
+    println!();
+    println!("Usage:");
+    println!("  focus_client_rust                  Run the async Focus Totem client");
+    println!("  focus_client_rust analytics        Print terminal analytics from sessions.json");
+    println!("  focus_client_rust report           Generate and open the HTML Focus Health Report");
+    println!("  focus_client_rust help             Show this help text");
+    println!();
+    println!("Aliases:");
+    println!("  analytics: a, --analytics, -a, --a");
+    println!("  report:    r, --report, -r, --r");
+    println!("  help:      h, --help, -h, --h");
+    println!();
+    println!("Cargo examples:");
+    println!("  cargo run -- analytics");
+    println!("  cargo run --release -- report");
+    println!("  cargo run -- h");
+}
+
+fn parse_cli_command(args: &[String]) -> Result<CliCommand, String> {
+    let command_args = &args[1..];
+
+    match command_args {
+        [] => Ok(CliCommand::Run),
+        [arg] => match arg.as_str() {
+            "analytics" | "a" | "--analytics" | "-a" | "--a" => Ok(CliCommand::Analytics),
+            "report" | "r" | "--report" | "-r" | "--r" => Ok(CliCommand::Report),
+            "help" | "h" | "--help" | "-h" | "--h" => Ok(CliCommand::Help),
+            other => Err(format!("Unknown command or flag '{other}'.")),
+        },
+        _ => Err(format!(
+            "Expected at most one command argument, got {}.",
+            command_args.len()
+        )),
+    }
+}
+
+fn run_report_cli() {
+    let path = sessions_file_path();
+    match load_sessions() {
+        Ok(sessions) => {
+            println!(
+                "Loaded {} session(s) from {}",
+                sessions.len(),
+                path.display()
+            );
+            let result = run_analytics(&sessions);
+            let html = report::generate_report(&result);
+            match report::open_in_browser(&html) {
+                Ok(report_path) => println!("Focus report generated: {}", report_path.display()),
+                Err(e) => eprintln!("ERROR: Failed to generate focus report: {}", e),
+            }
+        }
+        Err(e) => eprintln!(
+            "ERROR: Failed to load session log '{}': {}",
+            path.display(),
+            e
+        ),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args
-        .iter()
-        .any(|arg| arg == "--analytics" || arg == "--report")
-    {
-        run_analytics_cli();
-        return;
+    let cli_command = match parse_cli_command(&args) {
+        Ok(command) => command,
+        Err(e) => {
+            eprintln!("ERROR: {}", e);
+            print_usage();
+            return;
+        }
+    };
+
+    match cli_command {
+        CliCommand::Help => {
+            print_usage();
+            return;
+        }
+        CliCommand::Analytics => {
+            run_analytics_cli();
+            return;
+        }
+        CliCommand::Report => {
+            run_report_cli();
+            return;
+        }
+        CliCommand::Run => {}
     }
 
     let http_client = Client::builder()
-        .timeout(Duration::from_secs(2))
+        .timeout(HTTP_TIMEOUT)
         .build()
         .expect("Failed to build HTTP client");
 
-    let mut is_focused = false;
-    let mut esp32_address: Option<String> = None;
-    let mut session_start: Option<DateTime<Local>> = None;
-    let mut failed_pings = 0;
+    let mut client = FocusClient::new(http_client);
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
+    let shutdown_notify = Arc::new(Notify::new());
+
+    install_shutdown_listener(shutdown_requested.clone(), shutdown_notify.clone());
 
     println!("Starting Focus Mode client (Rust version)...");
     println!("Detected OS: {}", std::env::consts::OS);
@@ -490,132 +394,35 @@ async fn main() {
     if DEV_MODE {
         println!("==========================================");
         println!("=== DEVELOPMENT MODE ACTIVE (MOCK ESP32) ===");
-        println!("Mock ESP32 endpoint: http://localhost:8080/status");
+        println!("Mock ESP32 endpoint: {}", MOCK_STATUS_ENDPOINT);
         println!("To exit mock mode, build release or set DEV_MODE to false.");
         println!("==========================================");
     }
 
-    let run_main_loop = async {
-        loop {
-            // 1. Resolve Address
-            if esp32_address.is_none() {
-                if DEV_MODE {
-                    esp32_address = Some("http://localhost:8080/status".to_string());
-                    if let Some(address) = &esp32_address {
-                        println!("[MOCK] Simulated ESP32 address: {}", address);
-                    }
-                } else {
-                    println!("Searching for Focus Totem on the network...");
-                    // mDNS discovery is sync, spawn blocking
-                    if let Ok(Some(found_address)) =
-                        tokio::task::spawn_blocking(|| discover_device(Duration::from_secs(5)))
-                            .await
-                    {
-                        esp32_address = Some(found_address);
-                    } else {
-                        println!("Device not found. Will retry in 4 seconds.");
-                        tokio::time::sleep(Duration::from_secs(4)).await;
-                        continue;
-                    }
-                }
-            }
+    while !shutdown_requested.load(Ordering::SeqCst) {
+        client.tick(&shutdown_notify).await;
 
-            // 2. Fetch State
-            let mut current_state = "ERROR".to_string();
-            if let Some(address) = &esp32_address {
-                match http_client.get(address).send().await {
-                    Ok(response) if response.status().is_success() => {
-                        current_state = response.text().await.unwrap_or_default();
-                        failed_pings = 0; // Reset strikes on success
-                    }
-                    Ok(_) | Err(_) => {
-                        failed_pings += 1;
-                        if failed_pings >= 3 {
-                            if DEV_MODE {
-                                eprintln!("[MOCK] Error polling mock ESP32 (3 strikes).");
-                            } else {
-                                println!("Lost connection to device (3 strikes). Returning to search mode.");
-                            }
-                            current_state = "ERROR".to_string();
-                            esp32_address = None; // Force re-discovery
-                        } else {
-                            // Keep previous state but don't reset address yet
-                            current_state = if is_focused {
-                                "FOCUS_ON".to_string()
-                            } else {
-                                "FOCUS_OFF".to_string()
-                            };
-                        }
-                    }
-                }
-            }
-
-            // 3. React to State (State Machine)
-            if current_state == "FOCUS_ON" && !is_focused {
-                is_focused = true;
-                if DEV_MODE {
-                    println!("[MOCK] --- FOCUS MODE ACTIVATED ---");
-                } else {
-                    println!("--- FOCUS MODE ACTIVATED ---");
-                }
-                begin_focus_session(&mut session_start);
-
-                // JIT load focus apps
-                let focus_apps = tokio::task::spawn_blocking(load_focus_apps)
-                    .await
-                    .unwrap_or_default();
-                let focus_apps_clone = focus_apps.clone();
-                tokio::task::spawn_blocking(move || activate_focus_mode(&focus_apps_clone))
-                    .await
-                    .unwrap();
-            } else if current_state != "FOCUS_ON" && current_state != "ERROR" && is_focused {
-                is_focused = false;
-                if DEV_MODE {
-                    println!("[MOCK] --- FOCUS MODE DEACTIVATED ---");
-                } else {
-                    println!("--- FOCUS MODE DEACTIVATED ---");
-                }
-
-                // JIT load focus apps for deactivation
-                let focus_apps = tokio::task::spawn_blocking(load_focus_apps)
-                    .await
-                    .unwrap_or_default();
-                let focus_apps_clone = focus_apps.clone();
-                tokio::task::spawn_blocking(move || deactivate_focus_mode(&focus_apps_clone))
-                    .await
-                    .unwrap();
-                end_focus_session(&mut session_start);
-            } else if current_state == "ERROR" && is_focused {
-                is_focused = false;
-                if DEV_MODE {
-                    println!("[MOCK] --- FOCUS MODE DEACTIVATED (ERROR) ---");
-                } else {
-                    println!("--- FOCUS MODE DEACTIVATED (ERROR) ---");
-                }
-
-                let focus_apps = tokio::task::spawn_blocking(load_focus_apps)
-                    .await
-                    .unwrap_or_default();
-                let focus_apps_clone = focus_apps.clone();
-                tokio::task::spawn_blocking(move || deactivate_focus_mode(&focus_apps_clone))
-                    .await
-                    .unwrap();
-                end_focus_session(&mut session_start);
-            }
-
-            tokio::time::sleep(Duration::from_secs(3)).await;
+        if shutdown_requested.load(Ordering::SeqCst) {
+            break;
         }
-    };
 
-    tokio::select! {
-        _ = run_main_loop => {},
-        _ = tokio::signal::ctrl_c() => {
-            println!("Shutting down gracefully...");
-            if is_focused {
-                let focus_apps = load_focus_apps();
-                deactivate_focus_mode(&focus_apps);
-                end_focus_session(&mut session_start);
-            }
+        tokio::select! {
+            _ = tokio::time::sleep(POLL_INTERVAL) => {},
+            _ = shutdown_notify.notified() => break,
         }
     }
+
+    client.shutdown_gracefully().await;
+}
+
+fn install_shutdown_listener(shutdown_requested: Arc<AtomicBool>, shutdown_notify: Arc<Notify>) {
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                shutdown_requested.store(true, Ordering::SeqCst);
+                shutdown_notify.notify_one();
+            }
+            Err(e) => eprintln!("ERROR: Failed to listen for Ctrl+C: {}", e),
+        }
+    });
 }

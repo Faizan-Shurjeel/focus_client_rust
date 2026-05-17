@@ -316,21 +316,7 @@ void handleFocusToggle()
   server.send(200, "text/plain", isActive ? "FOCUS_ON" : "FOCUS_OFF");
 }
 
-void handleFocusOn()
-{
-  xSemaphoreTake(statusMutex, portMAX_DELAY);
-  sharedStatus.isFocusActive = true;
-  xSemaphoreGive(statusMutex);
-  server.send(200, "text/plain", "FOCUS_ON");
-}
 
-void handleFocusOff()
-{
-  xSemaphoreTake(statusMutex, portMAX_DELAY);
-  sharedStatus.isFocusActive = false;
-  xSemaphoreGive(statusMutex);
-  server.send(200, "text/plain", "FOCUS_OFF");
-}
 
 void statusMonitorTask(void *parameter)
 {
@@ -395,8 +381,6 @@ void setup()
   server.on("/api/status", HTTP_GET, handleApiStatus);
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/toggle", HTTP_GET, handleFocusToggle);
-  server.on("/focus/on", HTTP_GET, handleFocusOn);
-  server.on("/focus/off", HTTP_GET, handleFocusOff);
   server.begin();
 
   Serial.println("Web server running on Core 1 (main loop)");

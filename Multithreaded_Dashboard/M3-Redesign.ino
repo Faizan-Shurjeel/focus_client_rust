@@ -208,6 +208,19 @@ const char *dashboardHTML = R"rawliteral(
     .actions-wrapper {
       display: flex;
       justify-content: flex-start;
+      gap: 16px;
+    }
+
+    .focus-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .focus-toggle {
+      min-height: 48px;
+      padding: 0 28px;
+      font-size: 1rem;
     }
 
     /* Form Factor Adaptations */
@@ -244,6 +257,17 @@ const char *dashboardHTML = R"rawliteral(
             <span class="status-indicator" id="wifi-indicator"></span>
             <span id="wifi-status">Loading...</span>
           </span>
+        </div>
+
+        <div class="list-item">
+          <span class="label">Focus Mode</span>
+          <div class="focus-control">
+            <span class="value">
+              <span class="status-indicator" id="focus-indicator"></span>
+              <span id="focus-status">Loading...</span>
+            </span>
+            <button class="btn-primary focus-toggle" id="focus-toggle">Toggle</button>
+          </div>
         </div>
 
         <div class="list-item">
@@ -326,12 +350,45 @@ const char *dashboardHTML = R"rawliteral(
         document.getElementById('heap').textContent = data.freeHeap || 'N/A';
         document.getElementById('web-core').textContent = data.webCore || 'N/A';
         document.getElementById('monitor-core').textContent = data.monitorCore || 'N/A';
+
+        const focusIndicator = document.getElementById('focus-indicator');
+        const focusStatus = document.getElementById('focus-status');
+        const focusToggle = document.getElementById('focus-toggle');
+        const isFocusActive = Boolean(data.focusActive);
+        focusIndicator.className = `status-indicator ${isFocusActive ? 'status-connected' : 'status-disconnected'}`;
+        focusStatus.textContent = isFocusActive ? 'Active' : 'Inactive';
+        focusToggle.textContent = isFocusActive ? 'Deactivate' : 'Activate';
       } catch (error) {
         console.error('Error fetching status:', error);
       }
     }
 
+    async function toggleFocus() {
+      const focusToggle = document.getElementById('focus-toggle');
+      focusToggle.disabled = true;
+      focusToggle.textContent = 'Working...';
+      try {
+        const response = await fetch('/toggle');
+        if (!response.ok) {
+          console.error('Failed to toggle focus, server responded with:', response.status);
+          return;
+        }
+        const text = await response.text();
+        const isFocusActive = text.trim() === 'FOCUS_ON';
+        const focusIndicator = document.getElementById('focus-indicator');
+        const focusStatus = document.getElementById('focus-status');
+        focusIndicator.className = `status-indicator ${isFocusActive ? 'status-connected' : 'status-disconnected'}`;
+        focusStatus.textContent = isFocusActive ? 'Active' : 'Inactive';
+      } catch (error) {
+        console.error('Error toggling focus:', error);
+      } finally {
+        focusToggle.disabled = false;
+        updateStatus();
+      }
+    }
+
     document.getElementById('refresh-btn').addEventListener('click', updateStatus);
+    document.getElementById('focus-toggle').addEventListener('click', toggleFocus);
 
     // Initial load
     updateStatus();
@@ -374,10 +431,12 @@ void handleApiStatus()
   xSemaphoreTake(statusMutex, portMAX_DELAY);
   bool isConnecting = sharedStatus.wifiConnecting;
   bool isConnected = sharedStatus.wifiConnected;
+  bool isFocusActive = sharedStatus.isFocusActive;
   xSemaphoreGive(statusMutex);
 
   doc["wifiConnected"] = isConnected;
   doc["wifiConnecting"] = isConnecting;
+  doc["focusActive"] = isFocusActive;
   doc["ssid"] = ssid;
   doc["mdns"] = "focus-totem.local";
   doc["uptime"] = formatUptime(millis());
@@ -421,21 +480,7 @@ void handleFocusToggle()
   server.send(200, "text/plain", isActive ? "FOCUS_ON" : "FOCUS_OFF");
 }
 
-void handleFocusOn()
-{
-  xSemaphoreTake(statusMutex, portMAX_DELAY);
-  sharedStatus.isFocusActive = true;
-  xSemaphoreGive(statusMutex);
-  server.send(200, "text/plain", "FOCUS_ON");
-}
 
-void handleFocusOff()
-{
-  xSemaphoreTake(statusMutex, portMAX_DELAY);
-  sharedStatus.isFocusActive = false;
-  xSemaphoreGive(statusMutex);
-  server.send(200, "text/plain", "FOCUS_OFF");
-}
 
 void statusMonitorTask(void *parameter)
 {
@@ -500,8 +545,6 @@ void setup()
   server.on("/api/status", HTTP_GET, handleApiStatus);
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/toggle", HTTP_GET, handleFocusToggle);
-  server.on("/focus/on", HTTP_GET, handleFocusOn);
-  server.on("/focus/off", HTTP_GET, handleFocusOff);
   server.begin();
 
   Serial.println("Web server running on Core 1 (main loop)");

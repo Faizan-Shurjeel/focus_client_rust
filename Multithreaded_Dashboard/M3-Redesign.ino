@@ -494,6 +494,7 @@ void statusMonitorTask(void *parameter)
       Serial.println("WiFi has connected!");
       sharedStatus.wifiConnected = true;
       sharedStatus.wifiConnecting = false;
+      sharedStatus.isFocusActive = true; // Default to ON on reconnect
     }
     else if (!isConnectedNow && sharedStatus.wifiConnected)
     {
@@ -532,6 +533,7 @@ void setup()
 
   sharedStatus.wifiConnected = true;
   sharedStatus.wifiConnecting = false;
+  sharedStatus.isFocusActive = true; // Default to ON once connected
 
   if (!MDNS.begin("focus-totem"))
   {

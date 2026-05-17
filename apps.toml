@@ -9,7 +9,8 @@ windows = [
 ]
 
 linux = [
-  "zed"
+  "zed",
+  "brave-browser"
 ]
 
 # Optional for future use:

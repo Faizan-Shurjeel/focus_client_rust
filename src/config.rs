@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::{collections::HashMap, fs};
+use std::{collections::HashMap, fs, path::PathBuf};
 
 pub const FOCUS_WALLPAPER_NAME: &str = "focus_wallpaper.jpg";
 const APPS_CONFIG_FILE: &str = "apps.toml";
@@ -21,7 +21,7 @@ fn default_focus_apps() -> Vec<String> {
 
     #[cfg(target_os = "linux")]
     {
-        vec!["brave-browser".to_string()]
+        Vec::new()
     }
 
     #[cfg(target_os = "macos")]
@@ -50,8 +50,26 @@ fn sanitize_apps(apps: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn resolve_apps_config_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    candidates.push(PathBuf::from(APPS_CONFIG_FILE));
+
+    if let Ok(exe) = std::env::current_exe() {
+        let mut current = exe.parent().map(PathBuf::from);
+        for _ in 0..3 {
+            if let Some(dir) = current {
+                candidates.push(dir.join(APPS_CONFIG_FILE));
+                current = dir.parent().map(PathBuf::from);
+            }
+        }
+    }
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
 pub fn load_focus_apps() -> Vec<String> {
-    match fs::read_to_string(APPS_CONFIG_FILE) {
+    let config_path = resolve_apps_config_path().unwrap_or_else(|| PathBuf::from(APPS_CONFIG_FILE));
+    match fs::read_to_string(&config_path) {
         Ok(contents) => match parse_apps_config(&contents) {
             Ok(config) => {
                 let selected = select_apps_for_current_os(&config).unwrap_or_default();
@@ -61,7 +79,7 @@ pub fn load_focus_apps() -> Vec<String> {
                     println!(
                         "No apps configured for OS '{}' in '{}'. Using {} default app(s).",
                         std::env::consts::OS,
-                        APPS_CONFIG_FILE,
+                        config_path.display(),
                         defaults.len()
                     );
                     defaults
@@ -70,7 +88,7 @@ pub fn load_focus_apps() -> Vec<String> {
                         "Loaded {} app(s) for OS '{}' from '{}'.",
                         cleaned.len(),
                         std::env::consts::OS,
-                        APPS_CONFIG_FILE
+                        config_path.display()
                     );
                     cleaned
                 }
@@ -78,7 +96,8 @@ pub fn load_focus_apps() -> Vec<String> {
             Err(e) => {
                 eprintln!(
                     "ERROR: Could not parse '{}': {}. Falling back to defaults.",
-                    APPS_CONFIG_FILE, e
+                    config_path.display(),
+                    e
                 );
                 default_focus_apps()
             }
@@ -86,7 +105,8 @@ pub fn load_focus_apps() -> Vec<String> {
         Err(e) => {
             eprintln!(
                 "ERROR: Could not read '{}': {}. Falling back to defaults.",
-                APPS_CONFIG_FILE, e
+                config_path.display(),
+                e
             );
             default_focus_apps()
         }

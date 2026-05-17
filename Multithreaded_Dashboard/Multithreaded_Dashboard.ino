@@ -4,7 +4,7 @@
 #include <ArduinoJson.h>
 
 // --- IMPORTANT: CHANGE THESE TO YOUR WI-FI CREDENTIALS ---
-const char *ssid = "Faizy's A54";
+const char *ssid = "Faizy's A54 5G";
 const char *password = "12345678";
 
 WebServer server(80);
@@ -330,6 +330,7 @@ void statusMonitorTask(void *parameter)
       Serial.println("WiFi has connected!");
       sharedStatus.wifiConnected = true;
       sharedStatus.wifiConnecting = false;
+      sharedStatus.isFocusActive = true; // Default to ON on reconnect
     }
     else if (!isConnectedNow && sharedStatus.wifiConnected)
     {
@@ -368,6 +369,7 @@ void setup()
 
   sharedStatus.wifiConnected = true;
   sharedStatus.wifiConnecting = false;
+  sharedStatus.isFocusActive = true; // Default to ON once connected
 
   if (!MDNS.begin("focus-totem"))
   {
